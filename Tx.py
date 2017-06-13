@@ -1,13 +1,10 @@
 # function to call the main analysis/synthesis functions in software/models/stft.py
 import numpy as np
 import numpy.random as PN
-import matplotlib.pyplot as plt
 import os, sys
-from scipy.signal import get_window
 import bitarray
 import datetime
 import wm_util as UT
-import Rx
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Dropbox/sms/software/models'))
 #from .stft import stftAnal, stftSynth
@@ -20,22 +17,8 @@ spec.loader.exec_module(STFT)
 import utilFunctions as UF
 import mdct as MDCT
 
-
-fs = 44100
-frameSize = 1024
-pnsize = 32
-sync_pn_seed = 1
-data_pn_seed = 2
-#SYNC = [+1]
-SYNC = [-1,+1,+1,+1,-1,+1,-1,+1,-1,-1,
-        +1,-1,-1,+1,+1,+1,-1,+1,-1,+1,
-        -1,-1,+1,-1,+1,-1,-1,+1,+1,-1,
-        +1,-1,-1,+1,+1,-1,+1,+1,+1,+1,
-        +1,+1,-1,+1,+1,+1,-1,+1,-1,+1,
-        +1,-1,-1,-1,-1,-1,-1,-1,+1,+1,
-        +1,-1,-1,-1]
-
-
+from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
+    subband, norm_fact
 
 def insertBit(sourceSignal, bit, pnSeed, framesize, overwrite = False):
     pn = UT.getPN(pnSeed, pnsize)
@@ -49,10 +32,10 @@ def insertBit(sourceSignal, bit, pnSeed, framesize, overwrite = False):
         adjustedSpectrum = sourceSpectrum.copy()
         # plt.plot(adjustedSpectrum[:,1])
 
-        for band in UT.subband:
+        for band in subband:
             begin, end = UT.getTargetFreqBand(adjustedSpectrum, band)
             if overwrite == True:
-                adjustedSpectrum[begin:end, 1] = (pn * bit)
+                adjustedSpectrum[begin:end, 1] = pn * bit
             else:
                 adjustedSpectrum[begin:end, 1] += (pn * bit / 10000)
         # plt.plot(adjustedSpectrum[:, 1])
@@ -88,13 +71,16 @@ def insertBit(sourceSignal, bit, pnSeed, framesize, overwrite = False):
 
 def insertSYNC(target):
     wptr= 0
-    for idx, value  in enumerate(SYNC):
-        begin = idx * frameSize
-        end = (idx+1) * frameSize
-        #print("before:::", target[idx * framelength:idx * framelength+10])
-        target[begin:end] = insertBit(target[begin:end], value, sync_pn_seed, frameSize, overwrite=True)
-        #print("after:::", target[idx * framelength:idx * framelength + 10])
-        wptr = end
+    for repeat in range(NUMOFSYNCREPEAT):
+        lenSYNC = len(SYNC)
+        for idx, value  in enumerate(SYNC):
+            begin = (repeat * lenSYNC + idx) * frameSize
+            end = begin + frameSize
+            #print("before:::", target[idx * framelength:idx * framelength+10])
+            target[begin:end] = insertBit(target[begin:end], value, sync_pn_seed, frameSize, overwrite=True)
+            #print("after:::", target[idx * framelength:idx * framelength + 10])
+            wptr = end
+
     return wptr
 
 
@@ -108,7 +94,7 @@ def findSYNC(source):
     aa  = datetime.datetime.now()
     for idx in range(frameSize + 2):
         transformed = MDCT.mdct(source[idx:idx + int(frameSize)])
-        begin, end = UT.getTargetFreqBand(transformed)
+        begin, end = UT.getTargetFreqBand(transformed, subband[0])
         corr = abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1])
         #corr = np.correlate(transformed[begin:end, 1], pn)
         corrarray.append(corr)
@@ -122,7 +108,7 @@ def findSYNC(source):
     # plt.plot(corrarray)
     # plt.show()
 
-    if max_value > 0.7:
+    if max_value > detectionThreshold:
         return max_index
     else:
         print("Can't find cross-correlation peak over 0.8, max:%d in idx:%d" % (max_value, max_index))
@@ -141,13 +127,15 @@ def extractSYNC(source):
         frame = source[idx * frameSize : (idx + 1) * frameSize]
         pn = UT.getPN(sync_pn_seed, pnsize)
         transformed = MDCT.mdct(frame)
-        begin, end = UT.getTargetFreqBand(transformed)
+        begin, end = UT.getTargetFreqBand(transformed, subband[0])
         result = UT.SGN(transformed[begin:end,1], pn)
         if (result == value):
             found.append(result)
         else:
             break
 
+    UT.printwithsign("SYNC:", SYNC)
+    UT.printwithsign("BITS:", found)
     if (found == SYNC):
         print("SYNC is found")
         return True
@@ -164,7 +152,7 @@ def insertDATA(target, msg):
     wptr = 0
     for idx, value in enumerate(bitlist):
         target[idx * frameSize : (idx + 1) * frameSize] =\
-            insertBit(target[idx * frameSize : (idx + 1) * frameSize], value, data_pn_seed, frameSize, overwrite=True)
+            insertBit(target[idx * frameSize : (idx + 1) * frameSize], value, msg_pn_seed, frameSize, overwrite=True)
         wptr = (idx + 1) * frameSize
     return wptr
 
@@ -172,10 +160,10 @@ def insertDATA(target, msg):
 def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
     sample_location = int((fs / 100) * (location_msec / 10))  # in 10 msec
     target = rawdata[sample_location:]
-    print("Pos: %s\nBefore WM:" % (sample_location), rawdata[sample_location:sample_location + 20])
+    print("Pos: %s\nBefore WM:" % (sample_location), rawdata[sample_location:sample_location + 60].round(3))
 
     wptr = insertSYNC(target)
-    print("After WM :", rawdata[sample_location:sample_location + 20])
+    print("After WM :", rawdata[sample_location:sample_location + 60].round(3))
 
     #addNoise(rawdata[220500:])
     #extractSYNC(target)
@@ -198,17 +186,11 @@ def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
     # Rx.findMSG(target, 0)
 
 if __name__ == "__main__":
-    #testautocorr()
-    #main(inputFile='SleepAway.wav')#'E:/Dropbox/sms/sounds/flute-A4.wav')#'SleepAway.wav'
-    # ba = bitarray.bitarray()
-    # ba.fromstring("www.google.com\n")
-    # UT.print8bitAlignment(ba)
-
-    inputFile = 'SleepAway.wav'
+    inputFile = 'SleepAway_partial.wav'
     input_signal = UT.readWav(inputFile)
     print (type(input_signal))
     insertWM(input_signal, 5000, "www.naver.com\n")
 
     # output sound file (monophonic with sampling rate of 44100)
-    outputFile = './' + os.path.basename(inputFile)[:-4] + '_stft_subband.wav'
+    outputFile = './' + os.path.basename(inputFile)[:-4] + '_stft.wav'
     UF.wavwrite(input_signal, fs, outputFile)

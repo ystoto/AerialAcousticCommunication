@@ -17,19 +17,23 @@ import bitarray
 
 fs = 44100
 frameSize = 1024
-pnsize = 32
+pnsize = 32  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
+maxWatermarkingGain = 1.0  # 0 ~ 1
 sync_pn_seed = 1
-data_pn_seed = 2
+msg_pn_seed = 2
 #SYNC = [+1]
-SYNC = [-1,+1,+1,+1,-1,+1,-1,+1,-1,-1,
-        +1,-1,-1,+1,+1,+1,-1,+1,-1,+1,
-        -1,-1,+1,-1,+1,-1,-1,+1,+1,-1,
-        +1,-1,-1,+1,+1,-1,+1,+1,+1,+1,
-        +1,+1,-1,+1,+1,+1,-1,+1,-1,+1,
-        +1,-1,-1,-1,-1,-1,-1,-1,+1,+1,
-        +1,-1,-1,-1]
-detectionThreshold = 0.7
-subband = [0.7]
+NUMOFSYNCREPEAT = 8
+SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
+# SYNC = [-1,+1,+1,+1,-1,+1,-1,+1,-1,-1,
+#         +1,-1,-1,+1,+1,+1,-1,+1,-1,+1,
+#         -1,-1,+1,-1,+1,-1,-1,+1,+1,-1,
+#         +1,-1,-1,+1,+1,-1,+1,+1,+1,+1,
+#         +1,+1,-1,+1,+1,+1,-1,+1,-1,+1,
+#         +1,-1,-1,-1,-1,-1,-1,-1,+1,+1,
+#         +1,-1,-1,-1]
+#SYNC = [1 for i in range(32)]
+detectionThreshold = 0.75
+subband = [0.0]
 
 INT16_FAC = (2**15)-1
 INT32_FAC = (2**31)-1
@@ -63,7 +67,7 @@ def getPN(i=4, size=10):
     #print ("PN:", result)
     result = result[0]
     #print ("PN:", result)
-    return result
+    return result * maxWatermarkingGain
 
 def norminnerproduct(a, b):
     num = np.sum(np.multiply(a,b))
@@ -88,9 +92,22 @@ def printwithsign(msg, ba):
     print (msg, end=" ")
     for i, val in enumerate(ba):
         if val >= 0:
-            print("+%d" % val, end=" ")
+            print("1", end=" ")
         else:
-            print(val, end=" ")
+            print("_", end=" ")
+    print("")
+
+def printWithIndex(msg, ba, n=False):
+    print (msg, end=" ")
+    for i, val in enumerate(ba):
+        if n:
+            v = val
+        else:
+            v = int(val*100)
+        if val >= 0:
+            print("%d.(+%02d)" % (i, v), end=" ")
+        else:
+            print("%d.(-%02d)" % (i, v*-1), end=" ")
     print("")
 
 def print8bitAlignment(ba, printascii = True):
@@ -98,8 +115,11 @@ def print8bitAlignment(ba, printascii = True):
     for i, val in enumerate(ba):
         if i>0 and i%8 == 0:
             if printascii:
-                s = bitarray.bitarray(abyte).tostring()
-                print("--> ", s)
+                try:
+                    s = bitarray.bitarray(abyte).tostring()
+                    print("--> ", s)
+                except Exception as err:
+                    print(err)
                 abyte = []
             else:
                 print("")
@@ -217,3 +237,43 @@ class RIngBuffer:
 def tprint(*args, **kwargs):
     print(datetime.datetime.now(), end=" ")
     print(*args, **kwargs)
+
+def correlationTest():
+    localpnsize = 64
+    pnarr = []
+    for idx in range(127):
+        pn = getPN(idx, localpnsize)
+        pnarr.append(pn)
+
+    for idx in range(127):
+        max = 0
+        maxidx = -1
+        a = pnarr[idx]
+        for zidx in range(127):
+            noise = PN.rand(1, localpnsize)[0] / 0.78
+            b = np.add(a, noise)  # acoustic noise
+            corr = abs(np.corrcoef(b, pnarr[zidx])[0][1])
+            if max <= corr:
+                max = corr
+                maxidx = zidx
+        print ("%d  -- %d" % (idx, maxidx), max)
+        if idx != maxidx:
+            print ("***************************************")
+            exit(1)
+
+def bitExtractionTestwithShift():
+    buf = np.array([np.float32(None) for i in range(pnsize * 3)])
+    bits = [-1, +1, -1]
+    pn = getPN(2, pnsize)
+    for idx in range(3):
+        buf[idx * pnsize:(idx + 1) * pnsize] = pn * bits[idx]
+        # print (buf[idx*pnsize:(idx+1)*pnsize].round(3))
+
+    for idx in range(9):
+        begin = int(idx * (pnsize / 4))
+        end = begin + pnsize
+        bit = SGN(buf[begin:end], pn)
+        print(bit, abs(np.corrcoef(buf[begin:end], pn)[0][1]))
+
+if __name__ == "__main__":
+    correlationTest()
