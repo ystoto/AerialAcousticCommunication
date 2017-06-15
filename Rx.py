@@ -6,15 +6,16 @@ import datetime
 import time
 import subprocess
 import pyaudio
+import matplotlib.pyplot as plt
 
 #os.environ['PYTHONASYNCIODEBUG'] = '1'
 import asyncio
 
-sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Dropbox/sms/software/models'))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/PycharmProjects/sms/software/models'))
 #from .stft import stftAnal, stftSynth
 
 import importlib.util
-spec = importlib.util.spec_from_file_location("stft", "E:/Dropbox/sms/software/models/stft.py")
+spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
 STFT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(STFT)
 
@@ -25,7 +26,8 @@ import wm_util as UT
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
     subband, norm_fact
 
-#inputFile = 'last_mic_in.wav'
+#inputFile = 'last_mic_in1.wav'
+#inputFile = 'SleepAway_partial.wav'
 inputFile = 'SleepAway_partial_stft.wav'
 USE_MIC = False
 watingtime = 1.4
@@ -44,8 +46,8 @@ def extractSYNC(target):
         frame = target[idx * frameSize : (idx + 1) * frameSize]
         pn = UT.getPN(sync_pn_seed, pnsize)
         transformed = MDCT.mdct(frame)
-        begin, end = UT.getTargetFreqBand(transformed, subband[0])
-        result = UT.SGN(transformed[begin:end, 1], pn)
+        begin, end = UT.getTargetFreqBand(transformed, pnsize, subband[0])
+        result, accurcy= UT.SGN(transformed[begin:end, 1], pn)
         if (result == value):
             found.append(result)
         else:
@@ -58,6 +60,41 @@ def extractSYNC(target):
         print("SYNC is not found: ", found)
         return False
 
+async def printSYNC(posRead):
+    print ("---------------------------")
+    source, realPos = await rb.read(frameSize * NUMOFSYNCREPEAT * len(SYNC), posRead)
+    ix = 0
+    ppn = UT.getPN(sync_pn_seed, pnsize)
+    for n in range(NUMOFSYNCREPEAT):
+        print (posRead + (n * len(SYNC) * frameSize) , end=": ")
+        bitseq = []
+        for jj in range(len(SYNC)):
+            fram = source[ix:ix+frameSize]
+            ix += frameSize
+            tr = MDCT.mdct(fram)
+            begin, end = UT.getTargetFreqBand(tr, pnsize, subband[0])
+            re, accu = UT.SGN(tr[begin:end,1], ppn)
+            bitseq.append(re)
+        UT.printwithsign("", bitseq)
+
+async def printMSG(posRead):
+    print ("---------------------------")
+    source, realPos = await rb.read(frameSize * 88, posRead)
+    ix = 0
+    ppn = UT.getPN(msg_pn_seed, pnsize)
+    bitseq = []
+    for n in range(88):
+        begin = ix + n*frameSize
+        end = begin + frameSize
+        fram = source[begin:end]
+        tr = MDCT.mdct(fram)
+        begin, end = UT.getTargetFreqBand(tr, pnsize, subband[0])
+        re, accu = UT.SGN(tr[begin:end,1], ppn)
+        bitseq.append(re)
+    UT.convertNegative2Zero(bitseq)
+    UT.print8bitAlignment(bitseq)
+
+
 async def getProperPN(position, left_pnseed, right_pnseed):
     frame, realPos = await rb.read(frameSize, position)
     if (realPos != position):
@@ -68,7 +105,7 @@ async def getProperPN(position, left_pnseed, right_pnseed):
     leftPN = UT.getPN(left_pnseed, pnsize)
     rightPN = UT.getPN(right_pnseed, pnsize)
     for num, band in enumerate(subband):
-        begin, end = UT.getTargetFreqBand(transformed, band)
+        begin, end = UT.getTargetFreqBand(transformed, pnsize, band)
         a = abs(np.corrcoef(transformed[begin:end, 1], leftPN)[0][1])
         b = abs(np.corrcoef(transformed[begin:end, 1], rightPN)[0][1])
         if a > b:
@@ -99,10 +136,11 @@ async def extractBitSequence(position, seed, count=520, endOfSequence = ''):
         pn2 = UT.getPN(msg_pn_seed, pnsize)
         transformed = MDCT.mdct(frame)
         for num, band in enumerate(subband):
-            begin, end = UT.getTargetFreqBand(transformed, band)
-            result[num].append(UT.SGN(transformed[begin:end, 1], pn))
+            begin, end = UT.getTargetFreqBand(transformed, pnsize, band)
+            bit, accuracy = UT.SGN(transformed[begin:end, 1], pn)
+            result[num].append(bit)
             #result[num].append(abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1]))
-            result2[num].append(abs(np.corrcoef(transformed[begin:end, 1], pn2)[0][1]))
+            result2[num].append(accuracy)
             # result[num].append(np.correlate(transformed[begin:end, 1], pn))
             # result2[num].append(np.correlate(transformed[begin:end, 1], pn2))
         idx += 1
@@ -157,6 +195,7 @@ async def findSYNC(position):
 
 async def findMSG(position):
     #print(sys._getframe().f_code.co_name)
+    print ("Try to find MSG at ", position)
     bitsSequence, posRead, tmp = await extractBitSequence(position, msg_pn_seed, endOfSequence='\n')
     for i in range(len(bitsSequence)):
         UT.convertNegative2Zero(bitsSequence[i])
@@ -175,6 +214,7 @@ async def getMaxCorr(position):
     pn = UT.getPN(sync_pn_seed, pnsize)
     #print("pn: ", pn[:20])
     corrarray = []
+    dotparray = []
     aa  = datetime.datetime.now()
     source, realPos = await rb.read(frameSize * 2 + 8, position)
     if (realPos != position):
@@ -182,13 +222,19 @@ async def getMaxCorr(position):
     for idx in range(frameSize + 9):
         transformed = MDCT.mdct(source[idx:idx + int(frameSize)])
         posRead = realPos + idx + int(frameSize)
-        begin, end = UT.getTargetFreqBand(transformed, subband[0])
+        begin, end = UT.getTargetFreqBand(transformed, pnsize, subband[0])
         corr = abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1])
+        r1, r2 = UT.SGN(transformed[begin:end, 1], pn)
+        dotparray.append(r2)
         #corr = np.correlate(transformed[begin:end, 1], pn)
         corrarray.append(corr)
         if max_corr <= corr:
             max_corr = corr
             posMaxCorr = realPos + idx
+
+    # plt.plot(dotparray)
+    # plt.plot(corrarray)
+    # plt.show()
 
     bb = datetime.datetime.now()
     #print("execution time: ", bb-aa)
@@ -217,8 +263,8 @@ async def readStream(inStream):
                 data = np.float32(data) / norm_fact[data.dtype.name]
                 #print(len(data))
                 rb.write(data)
-                if (q and rb.writeptr() > RATE * 20):
-                    UF.wavwrite(rb.dat()[:RATE * 20], fs, "last_mic_in.wav")
+                if (q and rb.writeptr() > RATE * 30):
+                    UF.wavwrite(rb.dat()[:RATE * 30], fs, "last_mic_in.wav")
                     q = False
                 # count += 1
                 # if (count % 1 == 0):
@@ -269,10 +315,6 @@ def mic_off(stream = None):
     else:
         print()
 
-def getCurrentPos(duration):
-    duration_in_sample = int(fs * duration.total_seconds())
-    return duration_in_sample
-
 async def listen(doFunc):
     print(sys._getframe().f_code.co_name)
     global rb
@@ -281,6 +323,14 @@ async def listen(doFunc):
     lastPosRead = 0
     posRead = 0
     #UT.tprint("init: ", initialTime)
+
+    # for i in range(32):
+    #     print (i-16, 246054-16+i, end=": ***** ")
+    #     await printSYNC(246054-16+i)
+    #await printSYNC(246054 + 90112)
+    #await printMSG(246054 + 90112)
+    # return
+
     while True:
         try:
             msg = ""
@@ -333,6 +383,10 @@ def doMsg(msg):
     chrome_path = 'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe %s'
     #webbrowser.get('google-chrome').open(msg)
     subprocess.call(["C:\Program Files (x86)\Google\Chrome\Application\chrome.exe", msg])
+
+def getCurrentPos(duration):
+    duration_in_sample = int(fs * duration.total_seconds())
+    return duration_in_sample
 
 if __name__ == "__main__":
     # invereSYNC = [i* -1 for i in SYNC]

@@ -5,12 +5,13 @@ import os, sys
 import bitarray
 import datetime
 import wm_util as UT
+import matplotlib.pyplot as plt
 
-sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Dropbox/sms/software/models'))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/PycharmProjects/sms/software/models'))
 #from .stft import stftAnal, stftSynth
 
 import importlib.util
-spec = importlib.util.spec_from_file_location("stft", "E:/Dropbox/sms/software/models/stft.py")
+spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
 STFT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(STFT)
 
@@ -18,9 +19,38 @@ import utilFunctions as UF
 import mdct as MDCT
 
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, norm_fact
+    subband, partialPnSizePerFrame, norm_fact
 
-def insertBit(sourceSignal, bit, pnSeed, framesize, overwrite = False):
+def insertBit(sourceSignal, position, bit, pnSeed, overwrite = False):
+    pn = UT.getPN(pnSeed, pnsize)
+    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    embededData = pn * bit
+
+    for idx in range(numOfPartialPNs):
+        begin = idx * partialPnSizePerFrame
+        end = begin + partialPnSizePerFrame
+        if end > pnsize:
+            end = pnsize
+        embededDataLength = end - begin
+        partialEmbededData = embededData[begin:end]
+
+        srcBegin = position + idx * frameSize
+        srcEnd = srcBegin + frameSize
+        targetSpectrum = MDCT.mdct(sourceSignal[srcBegin:srcEnd], framelength = frameSize)
+
+        for band in subband: # embed a bit to multiple subbands
+            begin, end = UT.getTargetFreqBand(targetSpectrum, embededDataLength, band)
+            if overwrite == True:
+                targetSpectrum[begin:end, 1] = partialEmbededData
+            else:
+                targetSpectrum[begin:end, 1] += partialEmbededData
+        sourceSignal[srcBegin:srcEnd] = MDCT.imdct(targetSpectrum, framelength = frameSize)
+        # plt.plot(ts[256:, 1]+0.001)
+        # plt.show()
+
+    return srcEnd
+
+def insertBitOld(sourceSignal, bit, pnSeed, framesize, overwrite = False):
     pn = UT.getPN(pnSeed, pnsize)
     #print("insertBit, pn:", pn[:5])
 
@@ -33,7 +63,7 @@ def insertBit(sourceSignal, bit, pnSeed, framesize, overwrite = False):
         # plt.plot(adjustedSpectrum[:,1])
 
         for band in subband:
-            begin, end = UT.getTargetFreqBand(adjustedSpectrum, band)
+            begin, end = UT.getTargetFreqBand(adjustedSpectrum, pnsize, band)
             if overwrite == True:
                 adjustedSpectrum[begin:end, 1] = pn * bit
             else:
@@ -70,18 +100,14 @@ def insertBit(sourceSignal, bit, pnSeed, framesize, overwrite = False):
     return watermarkedSignal
 
 def insertSYNC(target):
-    wptr= 0
+    nextPosition = 0
     for repeat in range(NUMOFSYNCREPEAT):
-        lenSYNC = len(SYNC)
         for idx, value  in enumerate(SYNC):
-            begin = (repeat * lenSYNC + idx) * frameSize
-            end = begin + frameSize
             #print("before:::", target[idx * framelength:idx * framelength+10])
-            target[begin:end] = insertBit(target[begin:end], value, sync_pn_seed, frameSize, overwrite=True)
+            nextPosition = insertBit(target, nextPosition, value, sync_pn_seed, overwrite=True)
             #print("after:::", target[idx * framelength:idx * framelength + 10])
-            wptr = end
 
-    return wptr
+    return nextPosition
 
 
 def findSYNC(source):
@@ -94,7 +120,7 @@ def findSYNC(source):
     aa  = datetime.datetime.now()
     for idx in range(frameSize + 2):
         transformed = MDCT.mdct(source[idx:idx + int(frameSize)])
-        begin, end = UT.getTargetFreqBand(transformed, subband[0])
+        begin, end = UT.getTargetFreqBand(transformed, pnsize, subband[0])
         corr = abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1])
         #corr = np.correlate(transformed[begin:end, 1], pn)
         corrarray.append(corr)
@@ -121,14 +147,30 @@ def addNoise(source):
     print("noise:", noise[:10])
     print("output:", frame[:10])
 
-def extractSYNC(source):
+def extractSYNC(sourceSignal):
     found = []
-    for idx, value in enumerate(SYNC):
-        frame = source[idx * frameSize : (idx + 1) * frameSize]
+    position = 0
+    for bitIdx, value in enumerate(SYNC):
         pn = UT.getPN(sync_pn_seed, pnsize)
-        transformed = MDCT.mdct(frame)
-        begin, end = UT.getTargetFreqBand(transformed, subband[0])
-        result = UT.SGN(transformed[begin:end,1], pn)
+        numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+        embededData = []
+
+        for idx in range(numOfPartialPNs):
+            begin = idx * partialPnSizePerFrame
+            end = begin + partialPnSizePerFrame
+            if end > pnsize:
+                end = pnsize
+            embededDataLength = end - begin
+
+            srcBegin = position + idx * frameSize
+            srcEnd = srcBegin + frameSize
+            srcSpectrum = MDCT.mdct(sourceSignal[srcBegin:srcEnd], framelength=frameSize)
+
+            begin, end = UT.getTargetFreqBand(srcSpectrum, embededDataLength, subband[0])
+            embededData.extend(srcSpectrum[begin:end, 1])
+        position = srcEnd
+
+        result, accuracy = UT.SGN(embededData, pn)
         if (result == value):
             found.append(result)
         else:
@@ -152,7 +194,8 @@ def insertDATA(target, msg):
     wptr = 0
     for idx, value in enumerate(bitlist):
         target[idx * frameSize : (idx + 1) * frameSize] =\
-            insertBit(target[idx * frameSize : (idx + 1) * frameSize], value, msg_pn_seed, frameSize, overwrite=True)
+            insertBitOld(target[idx * frameSize : (idx + 1) * frameSize], value, msg_pn_seed, frameSize, overwrite=True)
+        #nextPosition = insertBit(target, nextPosition, value, sync_pn_seed, overwrite=True)
         wptr = (idx + 1) * frameSize
     return wptr
 

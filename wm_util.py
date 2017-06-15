@@ -1,5 +1,5 @@
 import os, sys
-sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Dropbox/sms/software/models'))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/PycharmProjects/sms/software/models'))
 #from .stft import stftAnal, stftSynth
 import numpy as np
 import numpy.random as PN
@@ -8,7 +8,7 @@ import datetime
 import asyncio
 
 import importlib.util
-spec = importlib.util.spec_from_file_location("stft", "E:/Dropbox/sms/software/models/stft.py")
+spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
 STFT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(STFT)
 
@@ -17,8 +17,9 @@ import bitarray
 
 fs = 44100
 frameSize = 1024
-pnsize = 32  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
-maxWatermarkingGain = 1.0  # 0 ~ 1
+pnsize = 128  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
+partialPnSizePerFrame = 128
+maxWatermarkingGain = 0.7  # 0 ~ 1
 sync_pn_seed = 1
 msg_pn_seed = 2
 #SYNC = [+1]
@@ -32,21 +33,21 @@ SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
 #         +1,-1,-1,-1,-1,-1,-1,-1,+1,+1,
 #         +1,-1,-1,-1]
 #SYNC = [1 for i in range(32)]
-detectionThreshold = 0.75
-subband = [0.0]
+detectionThreshold = 0.6
+subband = [0.6]
 
 INT16_FAC = (2**15)-1
 INT32_FAC = (2**31)-1
 INT64_FAC = (2**63)-1
 norm_fact = {'int16':INT16_FAC, 'int32':INT32_FAC, 'int64':INT64_FAC,'float32':1.0,'float64':1.0}
 
-def getTargetFreqBand(transformed, begin_ratio = 0.7):
-    size = transformed.shape[0]
-    if size * (1 - begin_ratio) > pnsize:
-        begin = int(size * begin_ratio)
+def getTargetFreqBand(transformed, targetLength, begin_ratio = 0.7):
+    spectrumSize = transformed.shape[0]
+    if spectrumSize * (1 - begin_ratio) > targetLength:
+        begin = int(spectrumSize * begin_ratio)
     else:
-        begin = size - pnsize
-    end = begin + pnsize
+        begin = spectrumSize - targetLength
+    end = begin + targetLength
     return begin, end
 
 def readWav(inputFile='../../sounds/piano.wav'):
@@ -83,10 +84,13 @@ def SGN(a, b):
     # print("a:", a[:10])
     # print("b:", b[:10])
     # print("result:", result)
+    # # a의 값이 10배가 되면 result도 10배가 됨..
+    # if (abs(result) < 0.4):
+    #     print("warning!!, bit: %d, accuracy: %f" % (result/abs(result), result))
     if result >= 0:
-        return 1
+        return 1, result
     else:
-        return -1
+        return -1, result
 
 def printwithsign(msg, ba):
     print (msg, end=" ")
@@ -272,8 +276,9 @@ def bitExtractionTestwithShift():
     for idx in range(9):
         begin = int(idx * (pnsize / 4))
         end = begin + pnsize
-        bit = SGN(buf[begin:end], pn)
-        print(bit, abs(np.corrcoef(buf[begin:end], pn)[0][1]))
+        bit, result = SGN(buf[begin:end], pn)
+        print(bit, abs(np.corrcoef(buf[begin:end], pn)[0][1]), round(result, 3))
 
 if __name__ == "__main__":
-    correlationTest()
+    #correlationTest()
+    bitExtractionTestwithShift()
