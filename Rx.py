@@ -30,7 +30,7 @@ from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMO
 #inputFile = 'SleepAway_partial.wav'
 inputFile = 'SleepAway_partial_stft.wav'
 USE_MIC = False
-watingtime = 1.4
+watingtime = 0.3  # Now, the getmaxcorr needs just 0.145msec
 
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
@@ -45,9 +45,9 @@ def extractSYNC(target):
     for idx, value in enumerate(SYNC):
         frame = target[idx * frameSize : (idx + 1) * frameSize]
         pn = UT.getPN(sync_pn_seed, pnsize)
-        transformed = MDCT.mdct(frame)
+        transformed = np.fft.fft(frame)
         begin, end = UT.getTargetFreqBand(transformed, pnsize, subband[0])
-        result, accurcy= UT.SGN(transformed[begin:end, 1], pn)
+        result, accurcy= UT.SGN(transformed.real[begin:end], pn)
         if (result == value):
             found.append(result)
         else:
@@ -71,9 +71,9 @@ async def printSYNC(posRead):
         for jj in range(len(SYNC)):
             fram = source[ix:ix+frameSize]
             ix += frameSize
-            tr = MDCT.mdct(fram)
+            tr = np.fft.fft(fram)
             begin, end = UT.getTargetFreqBand(tr, pnsize, subband[0])
-            re, accu = UT.SGN(tr[begin:end,1], ppn)
+            re, accu = UT.SGN(tr.real[begin:end], ppn)
             bitseq.append(re)
         UT.printwithsign("", bitseq)
 
@@ -87,9 +87,9 @@ async def printMSG(posRead):
         begin = ix + n*frameSize
         end = begin + frameSize
         fram = source[begin:end]
-        tr = MDCT.mdct(fram)
+        tr = np.fft.fft(fram)
         begin, end = UT.getTargetFreqBand(tr, pnsize, subband[0])
-        re, accu = UT.SGN(tr[begin:end,1], ppn)
+        re, accu = UT.SGN(tr.real[begin:end], ppn)
         bitseq.append(re)
     UT.convertNegative2Zero(bitseq)
     UT.print8bitAlignment(bitseq)
@@ -100,14 +100,14 @@ async def getProperPN(position, left_pnseed, right_pnseed):
     if (realPos != position):
         print("!!!!! wrong position realPos %d, begin %d" % (realPos, position))
         return -1
-    transformed = MDCT.mdct(frame)
+    transformed = np.fft.fft(frame)
 
     leftPN = UT.getPN(left_pnseed, pnsize)
     rightPN = UT.getPN(right_pnseed, pnsize)
     for num, band in enumerate(subband):
         begin, end = UT.getTargetFreqBand(transformed, pnsize, band)
-        a = abs(np.corrcoef(transformed[begin:end, 1], leftPN)[0][1])
-        b = abs(np.corrcoef(transformed[begin:end, 1], rightPN)[0][1])
+        a = abs(np.corrcoef(transformed.real[begin:end], leftPN)[0][1])
+        b = abs(np.corrcoef(transformed.real[begin:end], rightPN)[0][1])
         if a > b:
             return left_pnseed
         else:
@@ -134,10 +134,10 @@ async def extractBitSequence(position, seed, count=520, endOfSequence = ''):
         end = begin + frameSize
         pn = UT.getPN(seed, pnsize)
         pn2 = UT.getPN(msg_pn_seed, pnsize)
-        transformed = MDCT.mdct(frame)
+        transformed = np.fft.fft(frame)
         for num, band in enumerate(subband):
             begin, end = UT.getTargetFreqBand(transformed, pnsize, band)
-            bit, accuracy = UT.SGN(transformed[begin:end, 1], pn)
+            bit, accuracy = UT.SGN(transformed.real[begin:end], pn)
             result[num].append(bit)
             #result[num].append(abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1]))
             result2[num].append(accuracy)
@@ -220,11 +220,11 @@ async def getMaxCorr(position):
     if (realPos != position):
         print("!!!!! wrong position realPos %d, position %d" % (realPos, position))
     for idx in range(frameSize + 9):
-        transformed = MDCT.mdct(source[idx:idx + int(frameSize)])
+        transformed = np.fft.fft(source[idx:idx + int(frameSize)])
         posRead = realPos + idx + int(frameSize)
         begin, end = UT.getTargetFreqBand(transformed, pnsize, subband[0])
-        corr = abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1])
-        r1, r2 = UT.SGN(transformed[begin:end, 1], pn)
+        corr = abs(np.corrcoef(transformed.real[begin:end], pn)[0][1])
+        r1, r2 = UT.SGN(transformed.real[begin:end], pn)
         dotparray.append(r2)
         #corr = np.correlate(transformed[begin:end, 1], pn)
         corrarray.append(corr)
@@ -237,7 +237,7 @@ async def getMaxCorr(position):
     # plt.show()
 
     bb = datetime.datetime.now()
-    #print("execution time: ", bb-aa)
+    #print("execution time: ", (bb-aa).total_seconds())
     print ("--------------------max: ", max_corr, posMaxCorr)
     #print("pn_max/min : ", pn.max(), pn.min())
     # plt.plot(corrarray)
@@ -323,12 +323,13 @@ async def listen(doFunc):
     lastPosRead = 0
     posRead = 0
     #UT.tprint("init: ", initialTime)
-
-    # for i in range(32):
-    #     print (i-16, 246054-16+i, end=": ***** ")
-    #     await printSYNC(246054-16+i)
-    #await printSYNC(246054 + 90112)
-    #await printMSG(246054 + 90112)
+    #
+    # p = 1121493+3
+    # for i in range(16):
+    #     print (i-8, p-8+i, end=": ***** ")
+    #     await printSYNC(p-8+i)
+    # #await printSYNC(p + 90112)
+    # await printMSG(p + 90112)
     # return
 
     while True:

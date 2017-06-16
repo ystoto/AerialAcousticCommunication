@@ -36,15 +36,17 @@ def insertBit(sourceSignal, position, bit, pnSeed, overwrite = False):
 
         srcBegin = position + idx * frameSize
         srcEnd = srcBegin + frameSize
-        targetSpectrum = MDCT.mdct(sourceSignal[srcBegin:srcEnd], framelength = frameSize)
+        targetSpectrum = np.fft.fft(sourceSignal[srcBegin:srcEnd])
 
         for band in subband: # embed a bit to multiple subbands
             begin, end = UT.getTargetFreqBand(targetSpectrum, embededDataLength, band)
             if overwrite == True:
-                targetSpectrum[begin:end, 1] = partialEmbededData
+                targetSpectrum.real[begin:end] = partialEmbededData
             else:
-                targetSpectrum[begin:end, 1] += partialEmbededData
-        sourceSignal[srcBegin:srcEnd] = MDCT.imdct(targetSpectrum, framelength = frameSize)
+                targetSpectrum.real[begin:end] += partialEmbededData
+
+        u = np.fft.ifft(targetSpectrum)
+        sourceSignal[srcBegin:srcEnd] = np.fft.ifft(targetSpectrum).real
         # plt.plot(ts[256:, 1]+0.001)
         # plt.show()
 
@@ -56,7 +58,7 @@ def insertBitOld(sourceSignal, bit, pnSeed, framesize, overwrite = False):
 
     if (True): # Basic Algorithm
         #watermarkedSignal = np.add(originalSignal, np.multiply(pn, bit))
-        sourceSpectrum = MDCT.mdct(sourceSignal, framelength = framesize)
+        sourceSpectrum = np.fft.fft(sourceSignal)
 
         #plt.plot(sourceSpectrum)
         adjustedSpectrum = sourceSpectrum.copy()
@@ -65,14 +67,14 @@ def insertBitOld(sourceSignal, bit, pnSeed, framesize, overwrite = False):
         for band in subband:
             begin, end = UT.getTargetFreqBand(adjustedSpectrum, pnsize, band)
             if overwrite == True:
-                adjustedSpectrum[begin:end, 1] = pn * bit
+                adjustedSpectrum.real[begin:end] = pn * bit
             else:
-                adjustedSpectrum[begin:end, 1] += (pn * bit / 10000)
+                adjustedSpectrum.real[begin:end] += (pn * bit / 10000)
         # plt.plot(adjustedSpectrum[:, 1])
 
         #print ("%d -> %d " % (bit, UT.SGN(adjustedSpectrum[begin:end, 1], pn)))
 
-        watermarkedSignal = MDCT.imdct(adjustedSpectrum, framelength = framesize)
+        watermarkedSignal = np.fft.ifft(adjustedSpectrum).real
 
         # l1, = plt.plot(sourceSignal, label="L1")
         # l2, = plt.plot(watermarkedSignal, label='l2')
@@ -119,9 +121,9 @@ def findSYNC(source):
     corrarray = []
     aa  = datetime.datetime.now()
     for idx in range(frameSize + 2):
-        transformed = MDCT.mdct(source[idx:idx + int(frameSize)])
+        transformed = np.fft.fft(source[idx:idx + int(frameSize)])
         begin, end = UT.getTargetFreqBand(transformed, pnsize, subband[0])
-        corr = abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1])
+        corr = abs(np.corrcoef(transformed.real[begin:end], pn)[0][1])
         #corr = np.correlate(transformed[begin:end, 1], pn)
         corrarray.append(corr)
         if max_value <= corr:
@@ -164,10 +166,10 @@ def extractSYNC(sourceSignal):
 
             srcBegin = position + idx * frameSize
             srcEnd = srcBegin + frameSize
-            srcSpectrum = MDCT.mdct(sourceSignal[srcBegin:srcEnd], framelength=frameSize)
+            srcSpectrum = np.fft.fft(sourceSignal[srcBegin:srcEnd])
 
             begin, end = UT.getTargetFreqBand(srcSpectrum, embededDataLength, subband[0])
-            embededData.extend(srcSpectrum[begin:end, 1])
+            embededData.extend(srcSpectrum.real[begin:end])
         position = srcEnd
 
         result, accuracy = UT.SGN(embededData, pn)
@@ -209,7 +211,7 @@ def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
     print("After WM :", rawdata[sample_location:sample_location + 60].round(3))
 
     #addNoise(rawdata[220500:])
-    #extractSYNC(target)
+    extractSYNC(target)
     #findSYNC(rawdata[220500-512:])
 
     target = target[wptr:] # update write pointer

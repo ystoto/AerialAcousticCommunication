@@ -17,13 +17,13 @@ import bitarray
 
 fs = 44100
 frameSize = 1024
-pnsize = 128  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
-partialPnSizePerFrame = 128
-maxWatermarkingGain = 0.7  # 0 ~ 1
+pnsize = 32  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
+partialPnSizePerFrame = 32
+maxWatermarkingGain = 2  # 0 ~ 1
 sync_pn_seed = 1
 msg_pn_seed = 2
 #SYNC = [+1]
-NUMOFSYNCREPEAT = 8
+NUMOFSYNCREPEAT = 2
 SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
 # SYNC = [-1,+1,+1,+1,-1,+1,-1,+1,-1,-1,
 #         +1,-1,-1,+1,+1,+1,-1,+1,-1,+1,
@@ -33,7 +33,7 @@ SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
 #         +1,-1,-1,-1,-1,-1,-1,-1,+1,+1,
 #         +1,-1,-1,-1]
 #SYNC = [1 for i in range(32)]
-detectionThreshold = 0.6
+detectionThreshold = 0.7
 subband = [0.6]
 
 INT16_FAC = (2**15)-1
@@ -42,7 +42,7 @@ INT64_FAC = (2**63)-1
 norm_fact = {'int16':INT16_FAC, 'int32':INT32_FAC, 'int64':INT64_FAC,'float32':1.0,'float64':1.0}
 
 def getTargetFreqBand(transformed, targetLength, begin_ratio = 0.7):
-    spectrumSize = transformed.shape[0]
+    spectrumSize = transformed.size
     if spectrumSize * (1 - begin_ratio) > targetLength:
         begin = int(spectrumSize * begin_ratio)
     else:
