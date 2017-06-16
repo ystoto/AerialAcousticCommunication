@@ -16,7 +16,6 @@ STFT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(STFT)
 
 import utilFunctions as UF
-import mdct as MDCT
 
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
     subband, partialPnSizePerFrame, norm_fact
@@ -212,6 +211,7 @@ def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
 
     #addNoise(rawdata[220500:])
     extractSYNC(target)
+    #extractSYNC(target[45056:])
     #findSYNC(rawdata[220500-512:])
 
     target = target[wptr:] # update write pointer

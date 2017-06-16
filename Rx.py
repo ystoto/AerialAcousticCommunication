@@ -20,11 +20,10 @@ STFT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(STFT)
 
 import utilFunctions as UF
-import mdct as MDCT
 
 import wm_util as UT
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, norm_fact
+    subband, norm_fact, partialPnSizePerFrame
 
 #inputFile = 'last_mic_in1.wav'
 #inputFile = 'SleepAway_partial.wav'
@@ -94,26 +93,49 @@ async def printMSG(posRead):
     UT.convertNegative2Zero(bitseq)
     UT.print8bitAlignment(bitseq)
 
-
-async def getProperPN(position, left_pnseed, right_pnseed):
-    frame, realPos = await rb.read(frameSize, position)
-    if (realPos != position):
-        print("!!!!! wrong position realPos %d, begin %d" % (realPos, position))
-        return -1
-    transformed = np.fft.fft(frame)
-
-    leftPN = UT.getPN(left_pnseed, pnsize)
-    rightPN = UT.getPN(right_pnseed, pnsize)
-    for num, band in enumerate(subband):
-        begin, end = UT.getTargetFreqBand(transformed, pnsize, band)
-        a = abs(np.corrcoef(transformed.real[begin:end], leftPN)[0][1])
-        b = abs(np.corrcoef(transformed.real[begin:end], rightPN)[0][1])
-        if a > b:
-            return left_pnseed
-        else:
-            return right_pnseed
-
 async def extractBitSequence(position, seed, count=520, endOfSequence = ''):
+    global rb
+    result = [[] for i in range(len(subband))]
+    result2 = [[] for i in range(len(subband))]
+    idx = 0
+    end = 0
+    e = bitarray.bitarray()
+    e.fromstring(endOfSequence)
+    if (len(e) != 0 and len(e) != 8):
+        print("Wrong endOfSequence, size of e:", len(e))
+        return -1, -1
+
+    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    while(True):
+        begin = position + (idx * frameSize * numOfPartialPNs)
+        frame, realPos = await rb.read(frameSize * numOfPartialPNs, begin)
+        if (realPos != begin):
+            print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
+        end = begin + frameSize
+        pn = UT.getPN(seed, pnsize)
+        pn2 = UT.getPN(msg_pn_seed, pnsize)
+        extractedPN = [[] for i in subband]
+        for pnIdx in range(numOfPartialPNs):
+            transformed = np.fft.fft(frame)
+            for num, band in enumerate(subband):
+                begin, end = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, band)
+                extractedPN[num].extend(transformed.real[begin:end])
+        for num, band in enumerate(subband):
+            bit, accuracy = UT.SGN(extractedPN[num], pn)
+            result[num].append(bit)
+            #result[num].append(abs(np.corrcoef(transformed[begin:end, 1], pn)[0][1]))
+            result2[num].append(accuracy)
+            # result[num].append(np.correlate(transformed[begin:end, 1], pn))
+            # result2[num].append(np.correlate(transformed[begin:end, 1], pn2))
+        idx += 1
+        if (count > 0 and idx >= count):
+            break
+        if (idx % 8 == 0 and len(e) == 8):
+            if (e == bitarray.bitarray(UT.convertNegative2Zero(result[0][-8:]))):
+                break
+    return result, end, result2
+
+async def extractBitSequenceOld(position, seed, count=520, endOfSequence = ''):
     global rb
     #result = np.ndarray(shape=(len(subband),1))
     result = [[] for i in range(len(subband))]
@@ -159,10 +181,13 @@ def matchBitSequence(left, right):
             return len_L - idx
     return 0
 
-async def findSYNC(position):
-    posMaxCorr, posRead = await getMaxCorr(position)
-    if (posMaxCorr < 0):
-        return posMaxCorr, posRead
+async def findSYNC(position, searchingMaxCorr = True):
+    if searchingMaxCorr:
+        posMaxCorr, posRead = await getMaxCorr(position)
+        if (posMaxCorr < 0):
+            return posMaxCorr, posRead
+    else:
+        posMaxCorr = position
 
     for ii in range(1):
         p = posMaxCorr+ii
@@ -175,28 +200,29 @@ async def findSYNC(position):
     #bitsSequence, tmpPosRead, tmp = await extractBitSequence(posMaxCorr, sync_pn_seed, len(SYNC))
     numberOfMatchedTailBits = matchBitSequence(bitsSequence[0], SYNC)
     if (numberOfMatchedTailBits <= 0):
-        return -1, posRead
+        return -1, tmpPosRead
 
     # Confirm whole SYNC
     numberOfHeadBits = len(SYNC) - numberOfMatchedTailBits
-    position = posMaxCorr - (frameSize * numberOfHeadBits)
+    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    position = posMaxCorr - (frameSize * numberOfHeadBits * numOfPartialPNs)
     wholeBits, tmpPosRead, tmp = await extractBitSequence(position, sync_pn_seed, len(SYNC))
     tmpNumberOfMatchedBits = matchBitSequence(wholeBits[0], SYNC)
     if tmpNumberOfMatchedBits < len(SYNC):
         print("Not matched whole SYNC at %d" % position)
         UT.printwithsign("SYNC: ", SYNC)
         UT.printwithsign("BIT : ", wholeBits[0])
-        return -1, posRead
+        return -1, tmpPosRead
 
     print("whole SYNC are matched at %d" % position)
     UT.printwithsign("SYNC: ", SYNC)
     UT.printwithsign("BIT : ", wholeBits[0])
-    return posMaxCorr, posMaxCorr + (frameSize * numberOfMatchedTailBits)
+    return posMaxCorr, posMaxCorr + (frameSize * numberOfMatchedTailBits * numOfPartialPNs)
 
 async def findMSG(position):
     #print(sys._getframe().f_code.co_name)
     print ("Try to find MSG at ", position)
-    bitsSequence, posRead, tmp = await extractBitSequence(position, msg_pn_seed, endOfSequence='\n')
+    bitsSequence, posRead, tmp = await extractBitSequenceOld(position, msg_pn_seed, endOfSequence='\n')
     for i in range(len(bitsSequence)):
         UT.convertNegative2Zero(bitsSequence[i])
         ba = bitarray.bitarray(bitsSequence[i])
@@ -212,32 +238,48 @@ async def getMaxCorr(position):
     posMaxCorr = -1
     posRead = 0
     pn = UT.getPN(sync_pn_seed, pnsize)
+    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
     #print("pn: ", pn[:20])
     corrarray = []
     dotparray = []
     aa  = datetime.datetime.now()
-    source, realPos = await rb.read(frameSize * 2 + 8, position)
+    alpha = 8
+    targetFrameSize = frameSize * (numOfPartialPNs * 2) + 1 + alpha
+    source, realPos = await rb.read(targetFrameSize, position)
     if (realPos != position):
-        print("!!!!! wrong position realPos %d, position %d" % (realPos, position))
-    for idx in range(frameSize + 9):
-        transformed = np.fft.fft(source[idx:idx + int(frameSize)])
-        posRead = realPos + idx + int(frameSize)
-        begin, end = UT.getTargetFreqBand(transformed, pnsize, subband[0])
-        corr = abs(np.corrcoef(transformed.real[begin:end], pn)[0][1])
-        r1, r2 = UT.SGN(transformed.real[begin:end], pn)
-        dotparray.append(r2)
-        #corr = np.correlate(transformed[begin:end, 1], pn)
-        corrarray.append(corr)
-        if max_corr <= corr:
-            max_corr = corr
-            posMaxCorr = realPos + idx
+        print("warning!!  wrong position realPos %d, position %d" % (realPos, position))
 
+    try:
+        for idx in range(int(targetFrameSize/2) + 1 + alpha):
+            extractedPN = []
+            for pnIdx in range(numOfPartialPNs):
+                begin = idx + pnIdx * frameSize
+                end = begin + frameSize
+                transformed = np.fft.fft(source[begin:end])
+
+                begin, end = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, subband[0])
+                extractedPN.extend(transformed.real[begin:end])
+
+            posRead = realPos + idx + int(numOfPartialPNs * frameSize)
+            corr = abs(np.corrcoef(extractedPN, pn)[0][1])
+            corrarray.append(corr)
+
+            r1, r2 = UT.SGN(extractedPN, pn)
+            dotparray.append(r2)
+
+            if max_corr <= corr:
+                max_corr = corr
+                posMaxCorr = realPos + idx
+
+    except Exception as err:
+        print (err)
+        return -1, posRead
     # plt.plot(dotparray)
     # plt.plot(corrarray)
     # plt.show()
 
     bb = datetime.datetime.now()
-    #print("execution time: ", (bb-aa).total_seconds())
+    print("execution time: ", (bb-aa).total_seconds())
     print ("--------------------max: ", max_corr, posMaxCorr)
     #print("pn_max/min : ", pn.max(), pn.min())
     # plt.plot(corrarray)
@@ -289,6 +331,7 @@ async def readStream(inStream):
 def mic_on():
     if USE_MIC:
         print(sys._getframe().f_code.co_name)
+        global p
         p = pyaudio.PyAudio()
         stream = p.open(format=FORMAT,
                         channels=CHANNELS,
@@ -311,6 +354,7 @@ def mic_off(stream = None):
         print("* done recording")
         stream.stop_stream()
         stream.close()
+        global p
         p.terminate()
     else:
         print()
@@ -345,22 +389,23 @@ async def listen(doFunc):
             #targetStream = inStream[posRead:]  # Update read pointer
             #targetStream = await rb.read(posRead, frameSize*2+2, posRead)
             print ("pos: ", posRead / fs)
-            posFound, posRead = await findSYNC(posRead)
+            posFound, posRead = await findSYNC(posRead, True)
             if posFound < 0:
                 raise NotImplementedError("SYN is not found")
 
             # Search remain SYNCs
-            found = 0
+            endofSync = 0
+            position = posRead
             for idx in range(NUMOFSYNCREPEAT):
-                position = posRead + idx * frameSize * len(SYNC)
-                seed = await getProperPN(position, sync_pn_seed, msg_pn_seed)
-                if seed == msg_pn_seed:
-                    posRead = position
-                    found = 1
+                tmpPosFound, tmpPosRead = await findSYNC(position, False)
+                if tmpPosFound < 0:
+                    endofSync = 1
                     break
-            if found == 0:
-                raise NotImplementedError("MSG corr is not found")
+                posRead = position = tmpPosRead
+            if endofSync == 0:
+                raise NotImplementedError("MSG corr is not found, last read: ", posRead)
 
+            # Search Message
             msg, tmpPosRead = await findMSG(posRead)
             if (len(msg) <= 0):
                 raise NotImplementedError("MSG is not found")
@@ -390,10 +435,6 @@ def getCurrentPos(duration):
     return duration_in_sample
 
 if __name__ == "__main__":
-    # invereSYNC = [i* -1 for i in SYNC]
-    # UT.printwithsign("", invereSYNC)
-    # UT.printwithsign("", SYNC)
-    # print ("match", matchBitSequence(invereSYNC, SYNC))
     rb = UT.RIngBuffer(RATE * 60)
     inStream = mic_on()
     loop = asyncio.get_event_loop()

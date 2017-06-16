@@ -17,7 +17,7 @@ import bitarray
 
 fs = 44100
 frameSize = 1024
-pnsize = 32  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
+pnsize = 128  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
 partialPnSizePerFrame = 32
 maxWatermarkingGain = 2  # 0 ~ 1
 sync_pn_seed = 1
