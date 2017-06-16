@@ -15,6 +15,7 @@ spec.loader.exec_module(STFT)
 import utilFunctions as UF
 import bitarray
 
+ASCII_MAX = 127
 fs = 44100
 frameSize = 1024
 pnsize = 128  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
@@ -23,7 +24,7 @@ maxWatermarkingGain = 2  # 0 ~ 1
 sync_pn_seed = 1
 msg_pn_seed = 2
 #SYNC = [+1]
-NUMOFSYNCREPEAT = 2
+NUMOFSYNCREPEAT = 4
 SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
 # SYNC = [-1,+1,+1,+1,-1,+1,-1,+1,-1,-1,
 #         +1,-1,-1,+1,+1,+1,-1,+1,-1,+1,
@@ -143,7 +144,13 @@ def convertZero2Negative(bitssequence):
             bitssequence[idx] = -1
     return bitssequence
 
-
+def generatePnList():
+    if len(generatePnList.pnlist) == 0:
+        for i in range(ASCII_MAX):
+            generatePnList.pnlist.append(getPN(i+10, pnsize))
+        print("pnlist is just generated. ", len(generatePnList.pnlist))
+    return np.array(generatePnList.pnlist)
+generatePnList.pnlist = []
 
 class RIngBuffer:
     def __init__(self, maxlen = 1024*1024):
@@ -243,18 +250,14 @@ def tprint(*args, **kwargs):
     print(*args, **kwargs)
 
 def correlationTest():
-    localpnsize = 64
-    pnarr = []
-    for idx in range(127):
-        pn = getPN(idx, localpnsize)
-        pnarr.append(pn)
+    pnarr = generatePnList()
 
-    for idx in range(127):
+    for idx in range(ASCII_MAX):
         max = 0
         maxidx = -1
         a = pnarr[idx]
-        for zidx in range(127):
-            noise = PN.rand(1, localpnsize)[0] / 0.78
+        for zidx in range(ASCII_MAX):
+            noise = PN.rand(1, pnsize)[0] / 0.78
             b = np.add(a, noise)  # acoustic noise
             corr = abs(np.corrcoef(b, pnarr[zidx])[0][1])
             if max <= corr:
@@ -280,5 +283,6 @@ def bitExtractionTestwithShift():
         print(bit, abs(np.corrcoef(buf[begin:end], pn)[0][1]), round(result, 3))
 
 if __name__ == "__main__":
-    #correlationTest()
-    bitExtractionTestwithShift()
+    correlationTest()
+    #bitExtractionTestwithShift()
+

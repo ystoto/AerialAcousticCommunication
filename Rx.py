@@ -29,7 +29,7 @@ from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMO
 #inputFile = 'SleepAway_partial.wav'
 inputFile = 'SleepAway_partial_stft.wav'
 USE_MIC = False
-watingtime = 0.3  # Now, the getmaxcorr needs just 0.145msec
+watingtime = 1.0  # Now, the getmaxcorr needs just 0.145msec
 
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
@@ -219,17 +219,50 @@ async def findSYNC(position, searchingMaxCorr = True):
     UT.printwithsign("BIT : ", wholeBits[0])
     return posMaxCorr, posMaxCorr + (frameSize * numberOfMatchedTailBits * numOfPartialPNs)
 
-async def findMSG(position):
-    #print(sys._getframe().f_code.co_name)
-    print ("Try to find MSG at ", position)
-    bitsSequence, posRead, tmp = await extractBitSequenceOld(position, msg_pn_seed, endOfSequence='\n')
-    for i in range(len(bitsSequence)):
-        UT.convertNegative2Zero(bitsSequence[i])
-        ba = bitarray.bitarray(bitsSequence[i])
-        UT.print8bitAlignment(bitsSequence[i])
-        msg = ba.tostring().replace('\n', '')
-        print(msg)
-    return msg, posRead
+async def findMSG(position, count=520):
+    global rb
+    idx = 0
+    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    pnlist = UT.generatePnList()
+    result = str("")
+    print("At %d ****" % position, end=" ")
+    while(True):
+        begin = position + (idx * frameSize * numOfPartialPNs)
+        idx += 1
+        Nframes, realPos = await rb.read(frameSize * numOfPartialPNs, begin)
+        if (realPos != begin):
+            print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
+        end = begin + frameSize * numOfPartialPNs
+
+        embededCode = [[] for i in subband]
+        for frameIdx in range(numOfPartialPNs):
+            b = frameIdx * frameSize
+            e = b + frameSize
+            frame = Nframes[b:e]
+            transformed = np.fft.fft(frame)
+            for num, band in enumerate(subband):
+                b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, band)
+                embededCode[num].extend(transformed.real[b:e])
+
+        maxCorr = 0
+        maxCorrIdx = -1
+        for num, band in enumerate(subband):
+            for i, value in enumerate(pnlist):
+                corr = abs(np.corrcoef(embededCode[num], value)[0][1])
+                if corr > maxCorr:
+                    maxCorr = corr
+                    maxCorrIdx = i
+
+        character = chr(maxCorrIdx)
+        print("%c[ %d ]" % (character, maxCorrIdx), end=" ")
+        if character == '\n':
+            break
+        if idx > count:
+            break
+        result += character
+    print("")
+    return result, end
+
 
 async def getMaxCorr(position):
     global rb
@@ -250,15 +283,21 @@ async def getMaxCorr(position):
         print("warning!!  wrong position realPos %d, position %d" % (realPos, position))
 
     try:
+        fftCache = dict()
         for idx in range(int(targetFrameSize/2) + 1 + alpha):
             extractedPN = []
             for pnIdx in range(numOfPartialPNs):
                 begin = idx + pnIdx * frameSize
                 end = begin + frameSize
-                transformed = np.fft.fft(source[begin:end])
-
-                begin, end = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, subband[0])
-                extractedPN.extend(transformed.real[begin:end])
+                if begin in fftCache:
+                    transformed = fftCache[begin]
+                    b = 0
+                    e = partialPnSizePerFrame
+                else:
+                    transformed = np.fft.fft(source[begin:end])
+                    b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, subband[0])
+                    fftCache[begin] = transformed[b:e]
+                extractedPN.extend(transformed.real[b:e])
 
             posRead = realPos + idx + int(numOfPartialPNs * frameSize)
             corr = abs(np.corrcoef(extractedPN, pn)[0][1])

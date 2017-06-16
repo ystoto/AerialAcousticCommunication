@@ -18,10 +18,9 @@ spec.loader.exec_module(STFT)
 import utilFunctions as UF
 
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, partialPnSizePerFrame, norm_fact
+    subband, partialPnSizePerFrame, norm_fact, ASCII_MAX
 
-def insertBit(sourceSignal, position, bit, pnSeed, overwrite = False):
-    pn = UT.getPN(pnSeed, pnsize)
+def insertBit(sourceSignal, position, bit, pn, overwrite = False):
     numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
     embededData = pn * bit
 
@@ -105,7 +104,8 @@ def insertSYNC(target):
     for repeat in range(NUMOFSYNCREPEAT):
         for idx, value  in enumerate(SYNC):
             #print("before:::", target[idx * framelength:idx * framelength+10])
-            nextPosition = insertBit(target, nextPosition, value, sync_pn_seed, overwrite=True)
+            pn = UT.getPN(sync_pn_seed, pnsize)
+            nextPosition = insertBit(target, nextPosition, value, pn, overwrite=True)
             #print("after:::", target[idx * framelength:idx * framelength + 10])
 
     return nextPosition
@@ -186,20 +186,55 @@ def extractSYNC(sourceSignal):
         print("SYNC is not found: ", found)
         return False
 
-def insertDATA(target, msg):
-    ba = bitarray.bitarray()
-    ba.fromstring(msg)
-    bitlist = ba.tolist()
-    UT.convertZero2Negative(bitlist)
-    #UT.print8bitAlignment(bitlist)
-    wptr = 0
-    for idx, value in enumerate(bitlist):
-        target[idx * frameSize : (idx + 1) * frameSize] =\
-            insertBitOld(target[idx * frameSize : (idx + 1) * frameSize], value, msg_pn_seed, frameSize, overwrite=True)
-        #nextPosition = insertBit(target, nextPosition, value, sync_pn_seed, overwrite=True)
-        wptr = (idx + 1) * frameSize
-    return wptr
+def insertMSG(target, msg):
+    pnlist = UT.generatePnList()
+    nextPosition = 0
+    print("****", end=" ")
+    for idx, value in enumerate(msg):
+        asciiCode = ord(value)
+        print("%c[ %d ]" % (value, asciiCode), end=" ")
+        pn = pnlist[asciiCode]
+        nextPosition = insertBit(target, nextPosition, 1, pn, overwrite=True)
+    print("")
+    return nextPosition
 
+def extractMSG(target):
+    idx = 0
+    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    pnlist = UT.generatePnList()
+    result = str("")
+    position = 0
+    while (True):
+        begin = position + (idx * frameSize * numOfPartialPNs)
+        end = begin + frameSize * numOfPartialPNs
+        idx += 1
+
+        embededCode = [[] for i in subband]
+        for frameIdx in range(numOfPartialPNs):
+            b = begin + frameIdx * frameSize
+            e = b + frameSize
+            frame = target[b:e]
+            transformed = np.fft.fft(frame)
+            for num, band in enumerate(subband):
+                b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, band)
+                embededCode[num].extend(transformed.real[b:e])
+
+        maxCorr = 0
+        maxCorrIdx = -1
+        for num, band in enumerate(subband):
+            for i, value in enumerate(pnlist):
+                corr = abs(np.corrcoef(embededCode[num], value)[0][1])
+                if corr > maxCorr:
+                    maxCorr = corr
+                    maxCorrIdx = i
+
+        character = chr(maxCorrIdx)
+        print("%c[ %d ]" % (character, maxCorrIdx), end=" ")
+        if character == '\n':
+            break
+        result += character
+    print("")
+    return result, end
 
 def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
     sample_location = int((fs / 100) * (location_msec / 10))  # in 10 msec
@@ -216,7 +251,8 @@ def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
 
     target = target[wptr:] # update write pointer
 
-    insertDATA(target, msg)
+    insertMSG(target, msg)
+    extractMSG(target)
 
     # found = []
     # for idx, value in enumerate(range(120)):
@@ -229,6 +265,7 @@ def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
     # UT.convertNegative2Zero(found)
     # UT.print8bitAlignment(found)
     # Rx.findMSG(target, 0)
+
 
 if __name__ == "__main__":
     inputFile = 'SleepAway_partial.wav'
