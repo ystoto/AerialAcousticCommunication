@@ -10,10 +10,10 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/PycharmProjects/sms/software/models'))
 #from .stft import stftAnal, stftSynth
 
-import importlib.util
-spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
-STFT = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(STFT)
+# import importlib.util
+# spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
+# STFT = importlib.util.module_from_spec(spec)
+# spec.loader.exec_module(STFT)
 
 import utilFunctions as UF
 

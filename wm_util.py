@@ -7,10 +7,10 @@ import datetime
 #os.environ['PYTHONASYNCIODEBUG'] = '1'
 import asyncio
 
-import importlib.util
-spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
-STFT = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(STFT)
+# import importlib.util
+# spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
+# STFT = importlib.util.module_from_spec(spec)
+# spec.loader.exec_module(STFT)
 
 import utilFunctions as UF
 import bitarray
@@ -191,11 +191,12 @@ class RIngBuffer:
             self._copyIN(self._WP(), data)
             self.wp += s
 
-    async def read(self, length):
+    @asyncio.coroutine
+    def read(self, length):
         while True:
             validDataLength = self.wp - self.rp
             if validDataLength < length:
-                await asyncio.sleep(0.01)
+                yield from asyncio.sleep(0.01)
             else:
                 break
 
@@ -216,13 +217,14 @@ class RIngBuffer:
             return False
         return True
 
-    async def read(self, length, position):  # do not update
+    @asyncio.coroutine
+    def read(self, length, position):  # do not update
         while True:
             if self.wp >= position + length:
                 break;
             else:
                 #print("111", self.wp, self.rp, position)
-                await asyncio.sleep(0.0005)
+                yield from asyncio.sleep(0.0005)
 
         if not self.isAvailablePos(position):
             position = self.wp-self.maxlen
@@ -231,7 +233,7 @@ class RIngBuffer:
             validDataLength = self.wp - self.rp
             if validDataLength < length:
                 #print ("222", validDataLength, length, self.wp, self.rp)
-                await asyncio.sleep(0.0005)
+                yield from asyncio.sleep(0.0005)
             else:
                 break
 

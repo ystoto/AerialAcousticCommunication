@@ -14,10 +14,10 @@ import asyncio
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/PycharmProjects/sms/software/models'))
 #from .stft import stftAnal, stftSynth
 
-import importlib.util
-spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
-STFT = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(STFT)
+# import importlib.util
+# spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
+# STFT = importlib.util.module_from_spec(spec)
+# spec.loader.exec_module(STFT)
 
 import utilFunctions as UF
 
@@ -59,9 +59,10 @@ def extractSYNC(target):
         print("SYNC is not found: ", found)
         return False
 
-async def printSYNC(posRead):
+@asyncio.coroutine
+def printSYNC(posRead):
     print ("---------------------------")
-    source, realPos = await rb.read(frameSize * NUMOFSYNCREPEAT * len(SYNC), posRead)
+    source, realPos = yield from rb.read(frameSize * NUMOFSYNCREPEAT * len(SYNC), posRead)
     ix = 0
     ppn = UT.getPN(sync_pn_seed, pnsize)
     for n in range(NUMOFSYNCREPEAT):
@@ -76,9 +77,10 @@ async def printSYNC(posRead):
             bitseq.append(re)
         UT.printwithsign("", bitseq)
 
-async def printMSG(posRead):
+@asyncio.coroutine
+def printMSG(posRead):
     print ("---------------------------")
-    source, realPos = await rb.read(frameSize * 88, posRead)
+    source, realPos = yield from rb.read(frameSize * 88, posRead)
     ix = 0
     ppn = UT.getPN(msg_pn_seed, pnsize)
     bitseq = []
@@ -93,7 +95,8 @@ async def printMSG(posRead):
     UT.convertNegative2Zero(bitseq)
     UT.print8bitAlignment(bitseq)
 
-async def extractBitSequence(position, seed, count=520, endOfSequence = ''):
+@asyncio.coroutine
+def extractBitSequence(position, seed, count=520, endOfSequence = ''):
     global rb
     result = [[] for i in range(len(subband))]
     result2 = [[] for i in range(len(subband))]
@@ -108,7 +111,7 @@ async def extractBitSequence(position, seed, count=520, endOfSequence = ''):
     numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
     while(True):
         begin = position + (idx * frameSize * numOfPartialPNs)
-        frame, realPos = await rb.read(frameSize * numOfPartialPNs, begin)
+        frame, realPos = yield from rb.read(frameSize * numOfPartialPNs, begin)
         if (realPos != begin):
             print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
         end = begin + frameSize
@@ -135,7 +138,8 @@ async def extractBitSequence(position, seed, count=520, endOfSequence = ''):
                 break
     return result, end, result2
 
-async def extractBitSequenceOld(position, seed, count=520, endOfSequence = ''):
+@asyncio.coroutine
+def extractBitSequenceOld(position, seed, count=520, endOfSequence = ''):
     global rb
     #result = np.ndarray(shape=(len(subband),1))
     result = [[] for i in range(len(subband))]
@@ -150,7 +154,7 @@ async def extractBitSequenceOld(position, seed, count=520, endOfSequence = ''):
 
     while(True):
         begin = position + (idx * frameSize)
-        frame, realPos = await rb.read(frameSize, begin)
+        frame, realPos = yield from rb.read(frameSize, begin)
         if (realPos != begin):
             print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
         end = begin + frameSize
@@ -181,9 +185,10 @@ def matchBitSequence(left, right):
             return len_L - idx
     return 0
 
-async def findSYNC(position, searchingMaxCorr = True):
+@asyncio.coroutine
+def findSYNC(position, searchingMaxCorr = True):
     if searchingMaxCorr:
-        posMaxCorr, posRead = await getMaxCorr(position)
+        posMaxCorr, posRead = yield from getMaxCorr(position)
         if (posMaxCorr < 0):
             return posMaxCorr, posRead
     else:
@@ -192,12 +197,12 @@ async def findSYNC(position, searchingMaxCorr = True):
     for ii in range(1):
         p = posMaxCorr+ii
         print ("---", p, (p - 220500)/1024)
-        bitsSequence, tmpPosRead, tmp = await extractBitSequence(p, sync_pn_seed, len(SYNC))
+        bitsSequence, tmpPosRead, tmp = yield from extractBitSequence(p, sync_pn_seed, len(SYNC))
         UT.printWithIndex("SYNC: ", bitsSequence[0], True)
         UT.printWithIndex("DATA: ", tmp[0])
         UT.printwithsign("SYNC: ", SYNC)
         UT.printwithsign("BIT : ", bitsSequence[0])
-    #bitsSequence, tmpPosRead, tmp = await extractBitSequence(posMaxCorr, sync_pn_seed, len(SYNC))
+    #bitsSequence, tmpPosRead, tmp = yield from extractBitSequence(posMaxCorr, sync_pn_seed, len(SYNC))
     numberOfMatchedTailBits = matchBitSequence(bitsSequence[0], SYNC)
     if (numberOfMatchedTailBits <= 0):
         return -1, tmpPosRead
@@ -206,7 +211,7 @@ async def findSYNC(position, searchingMaxCorr = True):
     numberOfHeadBits = len(SYNC) - numberOfMatchedTailBits
     numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
     position = posMaxCorr - (frameSize * numberOfHeadBits * numOfPartialPNs)
-    wholeBits, tmpPosRead, tmp = await extractBitSequence(position, sync_pn_seed, len(SYNC))
+    wholeBits, tmpPosRead, tmp = yield from extractBitSequence(position, sync_pn_seed, len(SYNC))
     tmpNumberOfMatchedBits = matchBitSequence(wholeBits[0], SYNC)
     if tmpNumberOfMatchedBits < len(SYNC):
         print("Not matched whole SYNC at %d" % position)
@@ -219,7 +224,8 @@ async def findSYNC(position, searchingMaxCorr = True):
     UT.printwithsign("BIT : ", wholeBits[0])
     return posMaxCorr, posMaxCorr + (frameSize * numberOfMatchedTailBits * numOfPartialPNs)
 
-async def findMSG(position, count=520):
+@asyncio.coroutine
+def findMSG(position, count=520):
     global rb
     idx = 0
     numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
@@ -229,7 +235,7 @@ async def findMSG(position, count=520):
     while(True):
         begin = position + (idx * frameSize * numOfPartialPNs)
         idx += 1
-        Nframes, realPos = await rb.read(frameSize * numOfPartialPNs, begin)
+        Nframes, realPos = yield from rb.read(frameSize * numOfPartialPNs, begin)
         if (realPos != begin):
             print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
         end = begin + frameSize * numOfPartialPNs
@@ -264,7 +270,8 @@ async def findMSG(position, count=520):
     return result, end
 
 
-async def getMaxCorr(position):
+@asyncio.coroutine
+def getMaxCorr(position):
     global rb
     found = []
     max_corr = 0
@@ -278,7 +285,7 @@ async def getMaxCorr(position):
     aa  = datetime.datetime.now()
     alpha = 8
     targetFrameSize = frameSize * (numOfPartialPNs * 2) + 1 + alpha
-    source, realPos = await rb.read(targetFrameSize, position)
+    source, realPos = yield from rb.read(targetFrameSize, position)
     if (realPos != position):
         print("warning!!  wrong position realPos %d, position %d" % (realPos, position))
 
@@ -331,7 +338,8 @@ async def getMaxCorr(position):
         #print("Can't find cross-correlation peak over 0.8, max:%d in idx:%d" % (max_value, max_index))
         return -1, posRead
 
-async def readStream(inStream):
+@asyncio.coroutine
+def readStream(inStream):
     global rb
     q = True
     count = 0
@@ -349,7 +357,7 @@ async def readStream(inStream):
                     q = False
                 # count += 1
                 # if (count % 1 == 0):
-                await asyncio.sleep(0.001)
+                yield from asyncio.sleep(0.001)
             else:
                 size = CHUNK
                 if (len(inStream) < CHUNK):
@@ -358,7 +366,7 @@ async def readStream(inStream):
                 inStream = inStream[size:]
                 if len(inStream) == 0:
                     raise IOError("end of stream")
-                await asyncio.sleep(0.002)
+                yield from asyncio.sleep(0.002)
             #print("Done")
         except IOError as err:
             print(err, datetime.datetime.now())
@@ -398,7 +406,8 @@ def mic_off(stream = None):
     else:
         print()
 
-async def listen(doFunc):
+@asyncio.coroutine
+def listen(doFunc):
     print(sys._getframe().f_code.co_name)
     global rb
     time.sleep(1)
@@ -410,9 +419,9 @@ async def listen(doFunc):
     # p = 1121493+3
     # for i in range(16):
     #     print (i-8, p-8+i, end=": ***** ")
-    #     await printSYNC(p-8+i)
-    # #await printSYNC(p + 90112)
-    # await printMSG(p + 90112)
+    #     yield from printSYNC(p-8+i)
+    # #yield from printSYNC(p + 90112)
+    # yield from printMSG(p + 90112)
     # return
 
     while True:
@@ -426,9 +435,9 @@ async def listen(doFunc):
             if (posRead < lastPosRead):
                 posRead = lastPosRead
             #targetStream = inStream[posRead:]  # Update read pointer
-            #targetStream = await rb.read(posRead, frameSize*2+2, posRead)
+            #targetStream = yield from rb.read(posRead, frameSize*2+2, posRead)
             print ("pos: ", posRead / fs)
-            posFound, posRead = await findSYNC(posRead, True)
+            posFound, posRead = yield from findSYNC(posRead, True)
             if posFound < 0:
                 raise NotImplementedError("SYN is not found")
 
@@ -436,7 +445,7 @@ async def listen(doFunc):
             endofSync = 0
             position = posRead
             for idx in range(NUMOFSYNCREPEAT):
-                tmpPosFound, tmpPosRead = await findSYNC(position, False)
+                tmpPosFound, tmpPosRead = yield from findSYNC(position, False)
                 if tmpPosFound < 0:
                     endofSync = 1
                     break
@@ -445,7 +454,7 @@ async def listen(doFunc):
                 raise NotImplementedError("MSG corr is not found, last read: ", posRead)
 
             # Search Message
-            msg, tmpPosRead = await findMSG(posRead)
+            msg, tmpPosRead = yield from findMSG(posRead)
             if (len(msg) <= 0):
                 raise NotImplementedError("MSG is not found")
             lastPosRead = tmpPosRead
@@ -459,9 +468,9 @@ async def listen(doFunc):
             end = datetime.datetime.now()
             diff_sec = watingtime - (end-begin).total_seconds()
             if (diff_sec > 0):
-                await asyncio.sleep(diff_sec)
+                yield from asyncio.sleep(diff_sec)
             else:
-                await asyncio.sleep(0.005)
+                yield from asyncio.sleep(0.005)
     return
 
 def doMsg(msg):
