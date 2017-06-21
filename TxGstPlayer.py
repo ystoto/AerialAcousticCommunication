@@ -29,28 +29,154 @@ gi.require_version('GstVideo', '1.0')
 from gi.repository import Gst, GObject, Gtk
 from gi.repository import GdkX11, GstVideo
 
+import asyncio
+import Tx
+import wm_util as UT
+
 import time
 from subprocess import call
 VIDEO_PATH = "SleepAway_stft.mp4"
+PLAYING = 0
+PAUSED = 1
+STOPPED = 2
+bands_range = [29, 59, 119, 237, 474, 947, 1889, 3770, 7523, 15011]
 
 class GTK_Main(object):
     def __init__(self):
+        self.play_status = STOPPED
+        self.IS_GST010 = Gst.version()[0] == 0
+        self.volume = 100
         window = Gtk.Window(Gtk.WindowType.TOPLEVEL)
-        window.set_title("Audio-Player")
-        window.set_default_size(300, -1)
+        window.set_title("WM-Player")
+        window.set_default_size(450, -1)
         window.connect("destroy", Gtk.main_quit, "WM destroy")
 
         vbox = Gtk.VBox()
+        #vbox = Gtk.Box(Gtk.Orientation.HORIZONTAL, 0)
+        vbox.set_margin_top(3)
+        vbox.set_margin_bottom(3)
         window.add(vbox)
-        hbox = Gtk.HBox()
-        vbox.pack_start(hbox, False, False, 0)
 
-        self.entry = Gtk.Entry()
-        hbox.add(self.entry)
 
-        self.button = Gtk.Button("Start")
-        hbox.pack_start(self.button, False, False, 0)
-        self.button.connect("clicked", self.start_stop)
+        # input target media file
+        hbox_0st_line = Gtk.HBox()
+        vbox.pack_start(hbox_0st_line, False, False, 0)
+
+        self.label_target = Gtk.Label(label='target file')
+        self.label_target.set_margin_left(6)
+        self.label_target.set_margin_right(6)
+        hbox_0st_line.pack_start(self.label_target, False, False, 0)
+        self.entry_target = Gtk.Entry()
+        self.entry_target.set_text(VIDEO_PATH)
+        hbox_0st_line.add(self.entry_target)
+
+
+        hbox_1st_line = Gtk.HBox()
+        vbox.pack_start(hbox_1st_line, False, False, 0)
+        # self.entry = Gtk.Entry()
+        # hbox.add(self.entry)
+
+        # play button
+        self.playButtonImage = Gtk.Image()
+        self.playButtonImage.set_from_stock("gtk-media-play", Gtk.IconSize.BUTTON)
+        self.playButton = Gtk.Button.new()
+        self.playButton.add(self.playButtonImage)
+        self.playButton.connect("clicked", self.playToggled)
+        hbox_1st_line.pack_start(self.playButton, False, False, 0)
+
+        # stop button
+        self.stopButtonImage = Gtk.Image()
+        self.stopButtonImage.set_from_stock("gtk-media-stop", Gtk.IconSize.BUTTON)
+        self.stopButton = Gtk.Button.new()
+        self.stopButton.add(self.stopButtonImage)
+        self.stopButton.connect("clicked", self.stopToggled)
+        hbox_1st_line.pack_start(self.stopButton, False, False, 0)
+
+        # seek to given position
+        self.seek_entry = Gtk.Entry()
+        hbox_1st_line.add(self.seek_entry)
+        self.seekButtonImage = Gtk.Image()
+        self.seekButtonImage.set_from_stock("gtk-jump-to", Gtk.IconSize.BUTTON)
+        self.seekButton = Gtk.Button.new()
+        self.seekButton.add(self.seekButtonImage)
+        self.seekButton.connect("clicked", self.seekToggled)
+        hbox_1st_line.pack_start(self.seekButton, False, False, 0)
+        #hbox_1st_line.add(self.seekButton)
+
+        # seek slider
+        hbox_2nd_line = Gtk.HBox()
+        vbox.pack_start(hbox_2nd_line, False, False, 0)
+
+        self.label_progress = Gtk.Label(label='progress')
+        self.label_progress.set_margin_left(6)
+        self.label_progress.set_margin_right(6)
+        hbox_2nd_line.pack_start(self.label_progress, False, False, 0)
+
+        self.progress_slider = Gtk.HScale()
+        self.progress_slider.set_margin_left(6)
+        self.progress_slider.set_margin_right(6)
+        self.progress_slider.set_draw_value(False)
+        self.progress_slider.set_range(0, 100)
+        self.progress_slider.set_increments(1, 10)
+        hbox_2nd_line.pack_start(self.progress_slider, True, True, 0)
+
+        self.progress_label = Gtk.Label(label='0:00')
+        self.progress_label.set_margin_left(6)
+        self.progress_label.set_margin_right(6)
+        hbox_2nd_line.pack_start(self.progress_label, False, False, 0)
+
+
+        # # volume slider
+        hbox_3rd_line = Gtk.HBox()
+        vbox.pack_start(hbox_3rd_line, False, False, 0)
+
+        self.volume_label = Gtk.Label(label='volume   ')
+        self.volume_label.set_margin_left(6)
+        self.volume_label.set_margin_right(6)
+        hbox_3rd_line.pack_start(self.volume_label, False, False, 0)
+
+        self.volume_slider = Gtk.HScale()
+        self.volume_slider.set_margin_left(6)
+        self.volume_slider.set_margin_right(6)
+        self.volume_slider.set_draw_value(False)
+        self.volume_slider.set_range(0, 100)
+        self.volume_slider.set_increments(1, 10)
+        self.volume_slider.set_value(self.volume)
+        self.volume_slider.connect("value-changed", self.volume_changed_cb)
+        hbox_3rd_line.pack_start(self.volume_slider, True, True, 0)
+
+        self.volume_value = Gtk.Label(label='0')
+        self.volume_value.set_margin_left(6)
+        self.volume_value.set_margin_right(6)
+        self.volume_value.set_text(str(self.volume))
+        hbox_3rd_line.pack_start(self.volume_value, False, False, 0)
+
+        # equalizer preset combobox
+        hbox_4rd_line = Gtk.Box()
+        vbox.pack_start(hbox_4rd_line, False, False, 0)
+
+        self.eq_label = Gtk.Label(label='equalizer')
+        self.eq_label.set_margin_left(6)
+        self.eq_label.set_margin_right(6)
+        hbox_4rd_line.pack_start(self.eq_label, False, False, 0)
+
+        self.eq_textbox = Gtk.ComboBoxText()
+        self.eq_bands_dict = loadEqPresetFile()
+        for key in self.eq_bands_dict.keys():
+            self.eq_textbox.append(key, key)
+        self.eq_textbox.set_valign(Gtk.Align.CENTER)
+        self.eq_textbox.connect("changed", self.eq_changed_cb)
+        hbox_4rd_line.pack_start(self.eq_textbox, False, False, 0)
+
+        self.eq_slider = [Gtk.VScale() for i in range(10)]
+        for i in range(10):
+            self.eq_slider[i].set_draw_value(True)
+            self.eq_slider[i].set_value_pos(Gtk.PositionType.BOTTOM)
+            self.eq_slider[i].set_size_request(18,200)
+            self.eq_slider[i].set_range(-24, +12)
+            self.eq_slider[i].set_inverted(True)
+            hbox_4rd_line.pack_start(self.eq_slider[i], True, True, 0)
+
         self.movie_window = Gtk.DrawingArea()
         vbox.add(self.movie_window)
         window.show_all()
@@ -92,19 +218,35 @@ class GTK_Main(object):
         self.asink_bin.add_pad(gp) # Only avaiable after bin.add(eq)
         return self.asink_bin
 
-    def handoff_cb(self, element, buffer, pad):
-        #TODO: Insert watermark
+    def eq_changed_cb(self, combobox):
+        print("****", sys._getframe().f_code.co_name, combobox.get_active_id())
+        bands = self.eq_bands_dict[combobox.get_active_id()]
+        for i in range(10):
+            self.eq_slider[i].set_value(bands[i])
+            self.eq.set_property("band%d" % i, bands[i])
+        print ("eq_changed: ", bands)
 
+    def volume_changed_cb(self, gst_range):
+        print("****", sys._getframe().f_code.co_name, " - volume: ", int(gst_range.get_value()))
+        self.vol.set_property("volume", gst_range.get_value() / 100.0)
+
+    def handoff_cb(self, element, buffer, pad):
         if self.pyaudio == None:
+            in_format, in_rate, in_channels = getAudioInfo(pad.get_current_caps())
+            print ("audio format: %d, rate: %d,  ch: %d " % (in_format, in_rate, in_channels))
             self.pyaudio = pyaudio.PyAudio()
-            self.stream = self.pyaudio.open(format=self.pyaudio.get_format_from_width(4),
-                            channels=1,
-                            rate=44100,
+            self.stream = self.pyaudio.open(format=self.pyaudio.get_format_from_width(in_format),
+                            channels=in_channels,
+                            rate=in_rate,
                             output=True)
-            print("caps: ", pad.get_current_caps().to_string())
+            # src = UT.RIngBuffer(44100 * 10)
+            # sink = UT.RIngBuffer(44100 * 10)
+            # Tx.Start(src, sink)
 
         (ret, info) = buffer.map(Gst.MapFlags.READ)
-        if ret:
+        if ret == True:
+            # src.write(info.data)
+            # data = sink.read(info.size)
             self.stream.write(info.data)
         print ("output data: ", ret, buffer.pts, info.size)
 
@@ -126,35 +268,19 @@ class GTK_Main(object):
             self._video_window_handle = video_window.get_xid()
             print("222")
 
-    def start_stop(self, w):
-        if self.button.get_label() == "Start":
-            filepath = VIDEO_PATH #self.entry.get_text().strip()
-            if os.path.isfile(filepath):
-                filepath = os.path.realpath(filepath)
-                self.button.set_label("Stop")
-                self.player.set_property("uri", "file:///" + filepath)
-                self.player.set_state(Gst.State.PLAYING)
-                print(self.player.get_property("uri"))
-                print("START")
-        else:
-            self.player.set_state(Gst.State.NULL)
-            self.button.set_label("Start")
-            print("STOP")
-
     def on_message(self, bus, message):
         #print("on_message")
         t = message.type
         if t == Gst.MessageType.EOS:
             self.player.set_state(Gst.State.NULL)
-            self.button.set_label("Start")
+            self.stopToggled(None)
         elif t == Gst.MessageType.ERROR:
             self.player.set_state(Gst.State.NULL)
             err, debug = message.parse_error()
             print("Error: %s" % err, debug)
-            self.button.set_label("Start")
-        # else:
-        #     err, debug = message.parse_error()
-        #     print("what else: %s" % err, debug)
+            self.stopToggled(None)
+
+        self.updateButtons()
 
     def on_sync_message(self, bus, message):
         if message.get_structure().get_name() == 'prepare-window-handle':
@@ -163,6 +289,132 @@ class GTK_Main(object):
             #imagesink.set_window_handle(self.movie_window.get_property('window').get_xid())
             #self._on_video_realize(imagesink)
 
+    # def on_finished(self, player):
+    #     self.play_status = STOPPED
+    #     self.progress_slider.set_value(0)
+    #     self.progress_label.set_text("0:00")
+    #     self.updateButtons()
+
+    def play(self):
+        filepath = self.entry_target.get_text().strip()#VIDEO_PATH  # self.entry.get_text().strip()
+        if len(filepath) <= 0:
+            filepath = VIDEO_PATH
+
+        if os.path.isfile(filepath):
+            filepath = os.path.realpath(filepath)
+            self.player.set_property("uri", "file:///" + filepath)
+            self.player.set_state(Gst.State.PLAYING)
+            GObject.timeout_add(1000, self.updateProgressSlider)
+            print(self.player.get_property("uri"))
+            print("START")
+
+    def stop(self):
+        self.player.set_state(Gst.State.NULL)
+
+    def pause(self):
+        self.player.set_state(Gst.State.PAUSED)
+
+    def seekToggled(self, w):
+        pos =self.seek_entry.get_text().strip()
+        if len(pos) <= 0:
+            self.seek_entry.set_text("")
+            return
+
+        pos = int(pos)
+        duration_nanosecs = self.player.query_duration(Gst.Format.TIME)[1]
+        duration = float(duration_nanosecs) / Gst.SECOND
+        if pos >= duration - 5:
+            pos = duration - 5
+
+        if pos < 0:
+            pos = 0
+        print ("pos: ", pos, pos*Gst.SECOND)
+        pos_ns = pos * Gst.SECOND
+        self.player.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, pos_ns)
+
+    def stopToggled(self, w):
+        self.progress_slider.set_value(0)
+        self.progress_label.set_text("0:00")
+        self.stop()
+        self.play_status = STOPPED
+        self.updateButtons()
+
+    def playToggled(self, w):
+        if self.play_status == STOPPED or self.play_status == PAUSED:
+            self.play()
+            self.play_status = PLAYING
+        else:
+            self.pause()
+            self.play_status = PAUSED
+
+        self.updateButtons()
+
+
+    def updateProgressSlider(self):
+        if self.play_status == STOPPED:
+            return False  # cancel timeout
+
+        try:
+            nanosecs = self.player.query_position(Gst.Format.TIME)[1]
+            duration_nanosecs = self.player.query_duration(Gst.Format.TIME)[1]
+
+            # block seek handler so we don't seek when we set_value()
+            # self.slider.handler_block_by_func(self.on_slider_change)
+
+            duration = float(duration_nanosecs) / Gst.SECOND
+            position = float(nanosecs) / Gst.SECOND
+            #print("prog:", duration, position)
+            self.progress_slider.set_range(0, duration)
+            self.progress_slider.set_value(position)
+            self.progress_label.set_text("%d" % (position / 60) + ":%02d" % (position % 60))
+            # self.slider.handler_unblock_by_func(self.on_slider_change)
+        except Exception as e:
+            # pipeline must not be ready and does not know position
+            print(e)
+            pass
+        return True
+
+    def updateButtons(self):
+        if self.play_status == STOPPED or self.play_status == PAUSED:
+            self.playButtonImage.set_from_stock("gtk-media-play", Gtk.IconSize.BUTTON)
+        else:
+            self.playButtonImage.set_from_stock("gtk-media-pause", Gtk.IconSize.BUTTON)
+
+def loadEqPresetFile():
+    f = open("equalizer_preset.txt", "r")
+    result = dict()
+    while True:
+        line = f.readline()
+        if not line or len(line) == 0:
+            break
+
+        if line[0] == '[':
+            begin = 1
+            end = line.rfind(']')
+            key = line[begin:end]
+            bands = []
+            for i in range(10):
+                line = f.readline()
+                begin = line.rfind('=') + 1
+                bands.append(float(line[begin:]))
+            result[key] = bands
+    f.close()
+    return result
+
+def getAudioInfo(caps):
+    structure = caps.get_structure(0)
+    ret, channels = structure.get_int("channels")
+    ret, rate = structure.get_int("rate")
+    format = structure.get_string("format")
+    if format.find("32") >= 0:
+        format = 4
+    elif format.find("24") >= 0:
+        format = 3
+    elif format.find("16") >= 0:
+        format = 2
+    else:
+        format = 1
+    return format, rate, channels
 
 # call(["gst-launch", "playbin", "uri=\"file:///E:\\\\PycharmProjects\\\\AerialAcousticCommunication\\\\Kalimba.mp3\""])
 # time.sleep(1000)
@@ -171,216 +423,3 @@ GObject.threads_init()
 Gst.init(None)
 obj = GTK_Main()
 Gtk.main()
-
-
-# stop stream (4)
-# stream.stop_stream()
-# stream.close()
-
-
-
-
-####################################################################################
-
-# from pprint import pprint
-#
-# import gi
-# gi.require_version('Gtk', '3.0')
-# gi.require_version('Gst', '1.0')
-# gi.require_version('GstVideo', '1.0')
-#
-# from gi.repository import Gtk, Gst
-# Gst.init(None)
-# Gst.init_check(None)
-#
-#
-# class GstWidget(Gtk.Box):
-#     def __init__(self, pipeline):
-#         super().__init__()
-#         self.connect('realize', self._on_realize)
-#         self._bin = Gst.parse_bin_from_description('videotestsrc', True)
-#
-#     def _on_realize(self, widget):
-#         pipeline = Gst.Pipeline()
-#         factory = pipeline.get_factory()
-#         gtksink = factory.make('gtksink')
-#         pipeline.add(gtksink)
-#         pipeline.add(self._bin)
-#         self._bin.link(gtksink)
-#         self.pack_start(gtksink.props.widget, True, True, 0)
-#         gtksink.props.widget.show()
-#         #pipeline.set_state(Gst.State.PLAYING)
-#         pl = factory.make('playbin')
-#         #pl = Gst.ElementFactory.make("playbin", "player")
-#         asink = Gst.ElementFactory.make("autoaudiosink", "asink")
-#         pl.set_property("audio-sink", asink)
-#         pl.set_property("uri", "file:///E:\\PycharmProjects\\AerialAcousticCommunication\\Kalimba.mp3")
-#         print ("*** ", pl.get_property("uri"))
-#         pl.set_state(Gst.State.PLAYING)
-#
-# window = Gtk.ApplicationWindow()
-#
-# header_bar = Gtk.HeaderBar()
-# header_bar.set_show_close_button(True)
-# window.set_titlebar(header_bar)  # Place 2
-#
-# widget = GstWidget('videotestsrc')
-# widget.set_size_request(200, 200)
-# window.add(widget)
-# window.show_all()
-#
-# def on_destroy(win):
-#     try:
-#         Gtk.main_quit()
-#     except KeyboardInterrupt:
-#         pass
-#
-# window.connect('destroy', on_destroy)
-# Gtk.main()
-
-
-
-
-####################################################################################
-# import gi
-# gi.require_version('Gtk', '3.0')
-# gi.require_version('Gst', '1.0')
-#
-# from gi.repository import GObject
-# from gi.repository import GLib
-# from gi.repository import Gtk
-# from gi.repository import Gst
-#
-#
-# class PlaybackInterface:
-#     def __init__(self):
-#         self.playing = False
-#
-#         # A free example sound track
-#         self.uri = "http://cdn02.cdn.gorillavsbear.net/wp-content/uploads/2012/10/GORILLA-VS-BEAR-OCTOBER-2012.mp3"
-#
-#         # GTK window and widgets
-#         self.window = Gtk.Window()
-#         self.window.set_size_request(300, 50)
-#
-#         vbox = Gtk.Box(Gtk.Orientation.HORIZONTAL, 0)
-#         vbox.set_margin_top(3)
-#         vbox.set_margin_bottom(3)
-#         self.window.add(vbox)
-#
-#         self.playButtonImage = Gtk.Image()
-#         self.playButtonImage.set_from_stock("gtk-media-play", Gtk.IconSize.BUTTON)
-#         self.playButton = Gtk.Button.new()
-#         self.playButton.add(self.playButtonImage)
-#         self.playButton.connect("clicked", self.playToggled)
-#         Gtk.Box.pack_start(vbox, self.playButton, False, False, 0)
-#
-#         self.slider = Gtk.HScale()
-#         self.slider.set_margin_left(6)
-#         self.slider.set_margin_right(6)
-#         self.slider.set_draw_value(False)
-#         self.slider.set_range(0, 100)
-#         self.slider.set_increments(1, 10)
-#
-#         Gtk.Box.pack_start(vbox, self.slider, True, True, 0)
-#
-#         self.label = Gtk.Label(label='0:00')
-#         self.label.set_margin_left(6)
-#         self.label.set_margin_right(6)
-#         Gtk.Box.pack_start(vbox, self.label, False, False, 0)
-#
-#         self.window.show_all()
-#
-#         # GStreamer Setup
-#         Gst.init_check(None)
-#         self.IS_GST010 = Gst.version()[0] == 0
-#         self.player = Gst.ElementFactory.make("playbin", "player")
-#         assert self.player
-#         fakesink = Gst.ElementFactory.make("fakesink", "fakesink")
-#         self.player.set_property("video-sink", fakesink)
-#         bus = self.player.get_bus()
-#         # bus.add_signal_watch_full()
-#         bus.connect("message", self.on_message)
-#         self.player.connect("about-to-finish", self.on_finished)
-#
-#     def on_message(self, bus, message):
-#         t = message.type
-#         if t == Gst.Message.EOS:
-#             self.player.set_state(Gst.State.NULL)
-#             self.playing = False
-#         elif t == Gst.Message.ERROR:
-#             self.player.set_state(Gst.State.NULL)
-#             err, debug = message.parse_error()
-#             print
-#             "Error: %s" % err, debug
-#             self.playing = False
-#
-#         self.updateButtons()
-#
-#     def on_finished(self, player):
-#         self.playing = False
-#         self.slider.set_value(0)
-#         self.label.set_text("0:00")
-#         self.updateButtons()
-#
-#     def play(self):
-#         self.player.set_property("uri", self.uri)
-#         self.player.set_state(Gst.State.PLAYING)
-#         GObject.timeout_add(1000, self.updateSlider)
-#
-#     def stop(self):
-#         self.player.set_state(Gst.State.NULL)
-#
-#     def playToggled(self, w):
-#         self.slider.set_value(0)
-#         self.label.set_text("0:00")
-#
-#         if (self.playing == False):
-#             self.play()
-#         else:
-#             self.stop()
-#
-#         self.playing = not (self.playing)
-#         self.updateButtons()
-#
-#     def updateSlider(self):
-#         if (self.playing == False):
-#             return False  # cancel timeout
-#
-#         try:
-#             if self.IS_GST010:
-#                 nanosecs = self.player.query_position(Gst.Format.TIME)[2]
-#                 duration_nanosecs = self.player.query_duration(Gst.Format.TIME)[2]
-#             else:
-#                 nanosecs = self.player.query_position(Gst.Format.TIME)[1]
-#                 duration_nanosecs = self.player.query_duration(Gst.Format.TIME)[1]
-#
-#             # block seek handler so we don't seek when we set_value()
-#             # self.slider.handler_block_by_func(self.on_slider_change)
-#
-#             duration = float(duration_nanosecs) / Gst.SECOND
-#             position = float(nanosecs) / Gst.SECOND
-#             self.slider.set_range(0, duration)
-#             self.slider.set_value(position)
-#             self.label.set_text("%d" % (position / 60) + ":%02d" % (position % 60))
-#
-#             # self.slider.handler_unblock_by_func(self.on_slider_change)
-#
-#         except Exception as e:
-#             # pipeline must not be ready and does not know position
-#             print
-#             e
-#             pass
-#
-#         return True
-#
-#     def updateButtons(self):
-#         if (self.playing == False):
-#             self.playButtonImage.set_from_stock("gtk-media-play", Gtk.IconSize.BUTTON)
-#         else:
-#             self.playButtonImage.set_from_stock("gtk-media-stop", Gtk.IconSize.BUTTON)
-#
-#
-# if __name__ == "__main__":
-#     PlaybackInterface()
-#     Gtk.main()

@@ -4,6 +4,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Py
 import numpy as np
 import numpy.random as PN
 import datetime
+import time
 #os.environ['PYTHONASYNCIODEBUG'] = '1'
 import asyncio
 
@@ -191,12 +192,11 @@ class RIngBuffer:
             self._copyIN(self._WP(), data)
             self.wp += s
 
-    @asyncio.coroutine
     def read(self, length):
         while True:
             validDataLength = self.wp - self.rp
             if validDataLength < length:
-                yield from asyncio.sleep(0.01)
+                time.sleep(0.01)
             else:
                 break
 
