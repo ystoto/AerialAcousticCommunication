@@ -4,6 +4,8 @@ import numpy.random as PN
 import os, sys
 import bitarray
 import datetime
+import time
+import threading
 import wm_util as UT
 import matplotlib.pyplot as plt
 
@@ -18,9 +20,16 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Py
 import utilFunctions as UF
 
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, partialPnSizePerFrame, norm_fact, ASCII_MAX
+    subband, partialPnSizePerFrame, norm_fact, ASCII_MAX, CHUNK
 
-def insertBit(sourceSignal, position, bit, pn, overwrite = False):
+class NotEnoughData(Exception):
+    def __init__(self, *args, **kwargs):
+        print(args)
+        print(kwargs)
+        self.remain_data = None
+        super().__init__()
+
+def insertBit(inbuf, outbuf, bit, pn, overwrite = False):
     numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
     embededData = pn * bit
 
@@ -32,9 +41,10 @@ def insertBit(sourceSignal, position, bit, pn, overwrite = False):
         embededDataLength = end - begin
         partialEmbededData = embededData[begin:end]
 
-        srcBegin = position + idx * frameSize
-        srcEnd = srcBegin + frameSize
-        targetSpectrum = np.fft.fft(sourceSignal[srcBegin:srcEnd])
+        targetFrame = inbuf.read(frameSize)
+        if targetFrame.size < frameSize:
+            raise NotEnoughData("insertBit", outbuf, targetFrame)
+        targetSpectrum = np.fft.fft(targetFrame)
 
         for band in subband: # embed a bit to multiple subbands
             begin, end = UT.getTargetFreqBand(targetSpectrum, embededDataLength, band)
@@ -44,11 +54,10 @@ def insertBit(sourceSignal, position, bit, pn, overwrite = False):
                 targetSpectrum.real[begin:end] += partialEmbededData
 
         u = np.fft.ifft(targetSpectrum)
-        sourceSignal[srcBegin:srcEnd] = np.fft.ifft(targetSpectrum).real
+        outbuf.write(np.fft.ifft(targetSpectrum).real)
         # plt.plot(ts[256:, 1]+0.001)
         # plt.show()
 
-    return srcEnd
 
 def insertBitOld(sourceSignal, bit, pnSeed, framesize, overwrite = False):
     pn = UT.getPN(pnSeed, pnsize)
@@ -99,16 +108,13 @@ def insertBitOld(sourceSignal, bit, pnSeed, framesize, overwrite = False):
 
     return watermarkedSignal
 
-def insertSYNC(target):
-    nextPosition = 0
+def insertSYNC(inbuf, outbuf):
     for repeat in range(NUMOFSYNCREPEAT):
-        for idx, value  in enumerate(SYNC):
+        for idx, value in enumerate(SYNC):
             #print("before:::", target[idx * framelength:idx * framelength+10])
             pn = UT.getPN(sync_pn_seed, pnsize)
-            nextPosition = insertBit(target, nextPosition, value, pn, overwrite=True)
+            insertBit(inbuf, outbuf, value, pn, overwrite=True)
             #print("after:::", target[idx * framelength:idx * framelength + 10])
-
-    return nextPosition
 
 
 def findSYNC(source):
@@ -148,9 +154,8 @@ def addNoise(source):
     print("noise:", noise[:10])
     print("output:", frame[:10])
 
-def extractSYNC(sourceSignal):
+def extractSYNC(outbuf, position):
     found = []
-    position = 0
     for bitIdx, value in enumerate(SYNC):
         pn = UT.getPN(sync_pn_seed, pnsize)
         numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
@@ -165,7 +170,8 @@ def extractSYNC(sourceSignal):
 
             srcBegin = position + idx * frameSize
             srcEnd = srcBegin + frameSize
-            srcSpectrum = np.fft.fft(sourceSignal[srcBegin:srcEnd])
+            targetFrame, realPos = outbuf.readfromSync(frameSize, srcBegin, update_ptr=False)
+            srcSpectrum = np.fft.fft(targetFrame)
 
             begin, end = UT.getTargetFreqBand(srcSpectrum, embededDataLength, subband[0])
             embededData.extend(srcSpectrum.real[begin:end])
@@ -186,7 +192,7 @@ def extractSYNC(sourceSignal):
         print("SYNC is not found: ", found)
         return False
 
-def insertMSG(target, msg):
+def insertMSG(inbuf, outbuf, msg):
     pnlist = UT.generatePnList()
     nextPosition = 0
     print("****", end=" ")
@@ -194,16 +200,15 @@ def insertMSG(target, msg):
         asciiCode = ord(value)
         print("%c[ %d ]" % (value, asciiCode), end=" ")
         pn = pnlist[asciiCode]
-        nextPosition = insertBit(target, nextPosition, 1, pn, overwrite=True)
+        nextPosition = insertBit(inbuf, outbuf, 1, pn, overwrite=True)
     print("")
     return nextPosition
 
-def extractMSG(target):
+def extractMSG(outbuf, position):
     idx = 0
     numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
     pnlist = UT.generatePnList()
     result = str("")
-    position = 0
     while (True):
         begin = position + (idx * frameSize * numOfPartialPNs)
         end = begin + frameSize * numOfPartialPNs
@@ -213,7 +218,7 @@ def extractMSG(target):
         for frameIdx in range(numOfPartialPNs):
             b = begin + frameIdx * frameSize
             e = b + frameSize
-            frame = target[b:e]
+            frame, realPos = outbuf.readfromSync(frameSize, b, update_ptr=False)
             transformed = np.fft.fft(frame)
             for num, band in enumerate(subband):
                 b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, band)
@@ -236,43 +241,99 @@ def extractMSG(target):
     print("")
     return result, end
 
-def insertWM(rawdata, location_msec = 5000, msg=" "): #location in msec
-    sample_location = int((fs / 100) * (location_msec / 10))  # in 10 msec
-    target = rawdata[sample_location:]
-    print("Pos: %s\nBefore WM:" % (sample_location), rawdata[sample_location:sample_location + 60].round(3))
+def insertWM(inbuf, outbuf, msg=" "):
 
-    wptr = insertSYNC(target)
-    print("After WM :", rawdata[sample_location:sample_location + 60].round(3))
+    try:
+        out_writeptr = outbuf.writeptr()
+        print("Insert SYNC - begin", inbuf.readptr(), outbuf.writeptr())
+        insertSYNC(inbuf, outbuf)
+        print("Insert SYNC - end", inbuf.readptr(), outbuf.writeptr())
+        extractSYNC(outbuf, out_writeptr)
 
-    #addNoise(rawdata[220500:])
-    extractSYNC(target)
-    #extractSYNC(target[45056:])
-    #findSYNC(rawdata[220500-512:])
+        out_writeptr = outbuf.writeptr()
+        print("Insert MSG - begin", inbuf.readptr(), outbuf.writeptr())
+        insertMSG(inbuf, outbuf, msg)
+        print("Insert MSG - end", inbuf.readptr(), outbuf.writeptr())
+        extractMSG(outbuf, out_writeptr)
+    except Exception as err:
+        print(err)
 
-    target = target[wptr:] # update write pointer
 
-    insertMSG(target, msg)
-    extractMSG(target)
+class watermaker(threading.Thread):
+    def __init__(self, inbuf, outbuf):
+        self.inbuf = inbuf
+        self.outbuf = outbuf
+        self.wm_requested = False
+        self.requested_msg = ""
+        super().__init__()
 
-    # found = []
-    # for idx, value in enumerate(range(120)):
-    #     frame = target[idx * frameSize : (idx + 1) * frameSize]
-    #     pn = UT.getPN(data_pn_seed, pnsize)
-    #     transformed = MDCT.mdct(frame)
-    #     begin, end = UT.getTargetFreqBand(transformed)
-    #     result = UT.SGN(transformed[begin:end,1], pn)
-    #     found.append(result)
-    # UT.convertNegative2Zero(found)
-    # UT.print8bitAlignment(found)
-    # Rx.findMSG(target, 0)
+    def requestWM(self, msg):  # msg must include '\n'
+        self.requested_msg = msg
+        self.wm_requested = True
+
+    def run(self):
+        print ("watermaker is running")
+        transfered_size = 0
+        while(True):
+            if self.wm_requested:
+                print("Insert watermark - begin", self.inbuf.readptr(), self.outbuf.writeptr())
+                insertWM(self.inbuf, self.outbuf, self.requested_msg)
+                print("Insert watermark - end", self.inbuf.readptr(), self.outbuf.writeptr())
+                self.wm_requested = False
+                self.requested_msg = ""
+            else:
+                #print("wm - read - begin")
+                data = self.inbuf.read(CHUNK)
+                #print("wm - read - end - ", data.size)
+                transfered_size += data.size
+                if data.size == 0:
+                    print("wm - done")
+                    break
+                #print("wm - write - begin - ", data.size)
+                self.outbuf.write(data)
+                #print("wm - write - end")
+
+def Start(inbuf, outbuf):
+    wm = watermaker(inbuf, outbuf)
+    wm.start()
+    return wm
 
 
 if __name__ == "__main__":
     inputFile = 'SleepAway_partial.wav'
     input_signal = UT.readWav(inputFile)
-    print (type(input_signal))
-    insertWM(input_signal, 5000, "www.naver.com\n")
 
+    src = UT.RIngBuffer(44100 * 60)
+    sink = UT.RIngBuffer(44100 * 60)
+
+    wm_position =3000 # msec
+    wm_position = int((fs / 100) * (wm_position / 10))  # in 10 msec
+
+    # insert WM
+    thread = Start(src, sink)  # TODO: 1.2 second
+    print("Thread is requested")
+    transfered_size = 0
+    total_size = input_signal.size
+    wm_requested = False
+    watermarked_data = []
+
+    while (input_signal.size > 0):
+        if wm_requested == False and wm_position <= transfered_size:
+            wm_requested = True
+            thread.requestWM("www.naver.com\n")
+
+        #print ("A - WRITE done( %d )remained( %d ) total( %d ), " % (transfered_size, input_signal.size, total_size))
+        write_size = CHUNK if input_signal.size >= CHUNK else input_signal.size
+        src.write(input_signal[:write_size], eos = False if input_signal.size > CHUNK else True)
+        transfered_size += write_size
+        input_signal = input_signal[write_size:]
+
+        #print("A - READ")
+        watermarked_data.extend(sink.read(write_size))
+
+    print("all data is written")
     # output sound file (monophonic with sampling rate of 44100)
     outputFile = './' + os.path.basename(inputFile)[:-4] + '_stft.wav'
-    UF.wavwrite(input_signal, fs, outputFile)
+    UF.wavwrite(np.array(watermarked_data), fs, outputFile)
+    thread.join()
+    print("thread terminated")

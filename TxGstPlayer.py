@@ -23,6 +23,10 @@ import sys
 import ctypes
 import pyaudio
 import gi
+import numpy as np
+import wave
+import struct
+import datetime
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gst', '1.0')
 gi.require_version('GstVideo', '1.0')
@@ -32,6 +36,7 @@ from gi.repository import GdkX11, GstVideo
 import asyncio
 import Tx
 import wm_util as UT
+from wm_util import norm_fact
 
 import time
 from subprocess import call
@@ -50,6 +55,8 @@ class GTK_Main(object):
         window.set_title("WM-Player")
         window.set_default_size(450, -1)
         window.connect("destroy", Gtk.main_quit, "WM destroy")
+
+        self._init_audio_buffer()
 
         vbox = Gtk.VBox()
         #vbox = Gtk.Box(Gtk.Orientation.HORIZONTAL, 0)
@@ -177,6 +184,22 @@ class GTK_Main(object):
             self.eq_slider[i].set_inverted(True)
             hbox_4rd_line.pack_start(self.eq_slider[i], True, True, 0)
 
+
+        hbox_5th_line = Gtk.HBox()
+        vbox.pack_start(hbox_5th_line , False, False, 0)
+
+        # seek to given position
+        self.wm_entry = Gtk.Entry()
+        hbox_5th_line.add(self.wm_entry)
+        self.wmButtonImage = Gtk.Image()
+        self.wmButtonImage.set_from_stock("gtk-jump-down", Gtk.IconSize.BUTTON)
+        self.wmButton = Gtk.Button.new()
+        self.wmButton.add(self.wmButtonImage)
+        self.wmButton.connect("clicked", self.wmToggled)
+        hbox_5th_line.pack_start(self.wmButton, False, False, 0)
+        #hbox_1st_line.add(self.seekButton)
+
+
         self.movie_window = Gtk.DrawingArea()
         vbox.add(self.movie_window)
         window.show_all()
@@ -185,7 +208,7 @@ class GTK_Main(object):
         vsink = Gst.ElementFactory.make("autovideosink", "vsink")
         self.player.set_property("video-sink", vsink)
         self.pyaudio = None
-        asink = self.get_audiosink_bin()
+        asink = self._get_audiosink_bin()
         self.player.set_property("audio-sink", asink)
         bus = self.player.get_bus()
         bus.add_signal_watch()
@@ -193,7 +216,19 @@ class GTK_Main(object):
         bus.connect("message", self.on_message)
         bus.connect("sync-message::element", self.on_sync_message)
 
-    def get_audiosink_bin(self):
+    def __exit__(self, exc_type, exc_value, traceback):
+        for file in self.files:
+            # self.before_wav.close()
+            self.after_wav.close()
+            print("b / a wav clsosed")
+
+    def _init_audio_buffer(self):
+        self.audio_dump_cnt = 0
+        self.src = UT.RIngBuffer(44100 * 30)
+        self.sink = UT.RIngBuffer(44100 * 30)
+        self.thread = Tx.Start(self.src, self.sink)  # TODO: 1.2 second
+
+    def _get_audiosink_bin(self):
         self.asink_bin = Gst.Bin.new('asinkbin')
 
         self.eq = Gst.ElementFactory.make("equalizer-10bands", "eq")
@@ -231,24 +266,51 @@ class GTK_Main(object):
         self.vol.set_property("volume", gst_range.get_value() / 100.0)
 
     def handoff_cb(self, element, buffer, pad):
+        self.audio_dump_cnt += 1
         if self.pyaudio == None:
-            in_format, in_rate, in_channels = getAudioInfo(pad.get_current_caps())
-            print ("audio format: %d, rate: %d,  ch: %d " % (in_format, in_rate, in_channels))
+            in_format, in_rate, in_channels, in_type = getAudioInfo(pad.get_current_caps())
+            print(pad.get_current_caps().to_string())
+            print ("audio format: %d, rate: %d,  ch: %d,   type: %s " % (in_format, in_rate, in_channels, in_type))
             self.pyaudio = pyaudio.PyAudio()
             self.stream = self.pyaudio.open(format=self.pyaudio.get_format_from_width(in_format),
                             channels=in_channels,
                             rate=in_rate,
                             output=True)
-            # src = UT.RIngBuffer(44100 * 10)
-            # sink = UT.RIngBuffer(44100 * 10)
-            # Tx.Start(src, sink)
+            if in_type.find('f') >= 0:
+                audio_dtype = [None, np.float, np.float16, None, np.float32]
+            elif in_type.find('s') >= 0:
+                audio_dtype = [None, np.int8, np.int16, None, np.int32]
+            else:
+                audio_dtype = [None, np.uint8, np.uint16, None, np.uint32]
+            dt = np.dtype(audio_dtype[in_format])
+
+            if in_type.find("le"):
+                self.audio_dtype = dt.newbyteorder('<')
+            else:
+                self.audio_dtype = dt.newbyteorder('>')
+            print("audio_dtype : ", self.audio_dtype)
+
+            # self.before_wav = wave.open("before.wav", "wb")
+            # self.before_wav.setparams((in_channels, in_format, in_rate, 0, 'NONE', 'not compressed'))
+            self.after_wav = wave.open("after.wav", "wb")
+            self.after_wav.setparams((in_channels, in_format, in_rate, 0, 'NONE', 'not compressed'))
 
         (ret, info) = buffer.map(Gst.MapFlags.READ)
         if ret == True:
-            # src.write(info.data)
-            # data = sink.read(info.size)
-            self.stream.write(info.data)
-        print ("output data: ", ret, buffer.pts, info.size)
+            # TODO: wav dump -  wave.py only support integer value not floating point.
+            rawdata = np.frombuffer(info.data, dtype=self.audio_dtype)
+            # self.before_wav.writeframesraw(np.int32(rawdata * norm_fact['int32']).tobytes())
+            org_type_name = rawdata.dtype.name
+            normalized_rawdata = np.float32(rawdata) / norm_fact[org_type_name] # normalize rawdata , -1 to 1
+            # print("IN ", normalized_rawdata[:10], normalized_rawdata[-10:], normalized_rawdata.dtype, type(normalized_rawdata))
+            self.src.write(normalized_rawdata)
+            watermarked_data = self.sink.read(rawdata.size)
+            watermarked_data *= norm_fact[org_type_name]
+            watermarked_data = watermarked_data.astype(dtype=self.audio_dtype, copy=False)
+            # print("OU ", watermarked_data[:30], watermarked_data[-30:], watermarked_data.dtype, type(watermarked_data))
+            self.stream.write(watermarked_data.tobytes())
+            self.after_wav.writeframesraw(np.int32(watermarked_data * norm_fact['int32']).tobytes())
+        #print ("output data: ", ret, buffer.pts, info.size)
 
     def _on_video_realize(self, widget):
         # The window handle must be retrieved first in GUI-thread and before
@@ -338,6 +400,8 @@ class GTK_Main(object):
         self.stop()
         self.play_status = STOPPED
         self.updateButtons()
+        if self.after_wav is not None:
+            self.after_wav.close()
 
     def playToggled(self, w):
         if self.play_status == STOPPED or self.play_status == PAUSED:
@@ -349,6 +413,10 @@ class GTK_Main(object):
 
         self.updateButtons()
 
+    def wmToggled(self, w):
+        msg = self.wm_entry.get_text().strip()
+        msg += '\n'
+        self.thread.requestWM("www.naver.com\n")
 
     def updateProgressSlider(self):
         if self.play_status == STOPPED:
@@ -405,21 +473,24 @@ def getAudioInfo(caps):
     structure = caps.get_structure(0)
     ret, channels = structure.get_int("channels")
     ret, rate = structure.get_int("rate")
-    format = structure.get_string("format")
-    if format.find("32") >= 0:
+    type = structure.get_string("format")
+    if type.find("32") >= 0:
         format = 4
-    elif format.find("24") >= 0:
+    elif type.find("24") >= 0:
         format = 3
-    elif format.find("16") >= 0:
+    elif type.find("16") >= 0:
         format = 2
     else:
         format = 1
-    return format, rate, channels
 
-# call(["gst-launch", "playbin", "uri=\"file:///E:\\\\PycharmProjects\\\\AerialAcousticCommunication\\\\Kalimba.mp3\""])
-# time.sleep(1000)
+    return format, rate, channels, type.lower()
 
-GObject.threads_init()
-Gst.init(None)
-obj = GTK_Main()
-Gtk.main()
+
+if __name__ == "__main__":
+    # call(["gst-launch", "playbin", "uri=\"file:///E:\\\\PycharmProjects\\\\AerialAcousticCommunication\\\\Kalimba.mp3\""])
+    # time.sleep(1000)
+
+    GObject.threads_init()
+    Gst.init(None)
+    obj = GTK_Main()
+    Gtk.main()

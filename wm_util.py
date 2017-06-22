@@ -18,6 +18,7 @@ import bitarray
 
 ASCII_MAX = 127
 fs = 44100
+CHUNK = 1024
 frameSize = 1024
 pnsize = 128  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
 partialPnSizePerFrame = 32
@@ -159,12 +160,16 @@ class RIngBuffer:
         self.wp = 0
         self.rp = 0
         self.data = np.array([np.float32(None) for i in range(maxlen)])
+        self.eos = False
 
     def dat(self):
         return self.data
 
     def writeptr(self):
         return self.wp
+
+    def readptr(self):
+        return self.rp
 
     def _WP(self):
         return self.wp % self.maxlen
@@ -181,7 +186,7 @@ class RIngBuffer:
         else:
             self.data[position:position + s] = newdata
 
-    def write(self, data, allowOverwrite = False):
+    def write(self, data, allowOverwrite = False, eos = False):
         s = len(data)
         #tprint("write: ", s)
         if self.maxlen - (self.wp - self.rp) >= s: # has enough space
@@ -191,24 +196,29 @@ class RIngBuffer:
             self.rp = self.wp + s
             self._copyIN(self._WP(), data)
             self.wp += s
+        self.eos = eos
 
-    def read(self, length):
+    def read(self, length, update_ptr = True):
         while True:
             validDataLength = self.wp - self.rp
-            if validDataLength < length:
+            if not self.eos and validDataLength < length:
                 time.sleep(0.01)
             else:
                 break
 
+        if validDataLength <= 0 and self.eos:
+            return np.array([])
+
         begin = self._RP()
         end = (begin + length) % self.maxlen
 
-        self.rp += length
+        if update_ptr:
+            self.rp += length
 
         if end > begin:
             return self.data[begin:end].copy()
         else:
-            return self.data[begin:].copy().append(self.data[:end])
+            return np.append(self.data[begin:], self.data[:end])
 
     def isAvailablePos(self, position):
         if position >= self.wp:
@@ -217,8 +227,40 @@ class RIngBuffer:
             return False
         return True
 
+    def readfromSync(self, length, position, update_ptr=True):  # do not update
+        while True:
+            if self.wp >= position + length:
+                break;
+            else:
+                # print("111", self.wp, self.rp, position)
+                time.sleep(0.0005)
+
+        if not self.isAvailablePos(position):
+            position = self.wp - self.maxlen
+            if position < 0:
+                position = 0
+
+        while True:
+            validDataLength = self.wp - self.maxlen if self.maxlen < self.wp else self.wp
+            if validDataLength < length:
+                # print ("222", validDataLength, length, self.wp, self.rp)
+                time.sleep(0.0005)
+            else:
+                break
+
+        begin = position % self.maxlen
+        end = (begin + length) % self.maxlen
+        # print ("333", self.rp, self.wp, position, length)
+        if update_ptr:
+            self.rp = position + length
+
+        if end > begin:
+            return self.data[begin:end].copy(), position
+        else:
+            return np.append(self.data[begin:], self.data[:end]), position
+
     @asyncio.coroutine
-    def read(self, length, position):  # do not update
+    def readfrom(self, length, position, update_ptr = True):  # do not update
         while True:
             if self.wp >= position + length:
                 break;
@@ -228,9 +270,11 @@ class RIngBuffer:
 
         if not self.isAvailablePos(position):
             position = self.wp-self.maxlen
+            if position < 0:
+                position = 0
 
         while True:
-            validDataLength = self.wp - self.rp
+            validDataLength = self.wp - self.rp # TODO: Fix as what readfromSync does
             if validDataLength < length:
                 #print ("222", validDataLength, length, self.wp, self.rp)
                 yield from asyncio.sleep(0.0005)
@@ -240,12 +284,13 @@ class RIngBuffer:
         begin = position % self.maxlen
         end = (begin + length) % self.maxlen
         #print ("333", self.rp, self.wp, position, length)
-        self.rp = position + length
+        if update_ptr:
+            self.rp = position + length
 
         if end > begin:
             return self.data[begin:end].copy(), position
         else:
-            return self.data[begin:].copy().append(self.data[:end]), position
+            return np.append(self.data[begin:], self.data[:end]), position
 
 def tprint(*args, **kwargs):
     print(datetime.datetime.now(), end=" ")

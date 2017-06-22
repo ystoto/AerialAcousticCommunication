@@ -23,15 +23,15 @@ import utilFunctions as UF
 
 import wm_util as UT
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, norm_fact, partialPnSizePerFrame
+    subband, norm_fact, partialPnSizePerFrame, CHUNK
 
 #inputFile = 'last_mic_in1.wav'
 #inputFile = 'SleepAway_partial.wav'
-inputFile = 'SleepAway_partial_stft.wav'
+#inputFile = 'SleepAway_partial_stft.wav'
+inputFile = 'after.wav'
 USE_MIC = False
 watingtime = 1.0  # Now, the getmaxcorr needs just 0.145msec
 
-CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
@@ -62,7 +62,7 @@ def extractSYNC(target):
 @asyncio.coroutine
 def printSYNC(posRead):
     print ("---------------------------")
-    source, realPos = yield from rb.read(frameSize * NUMOFSYNCREPEAT * len(SYNC), posRead)
+    source, realPos = yield from rb.readfrom(frameSize * NUMOFSYNCREPEAT * len(SYNC), posRead)
     ix = 0
     ppn = UT.getPN(sync_pn_seed, pnsize)
     for n in range(NUMOFSYNCREPEAT):
@@ -80,7 +80,7 @@ def printSYNC(posRead):
 @asyncio.coroutine
 def printMSG(posRead):
     print ("---------------------------")
-    source, realPos = yield from rb.read(frameSize * 88, posRead)
+    source, realPos = yield from rb.readfrom(frameSize * 88, posRead)
     ix = 0
     ppn = UT.getPN(msg_pn_seed, pnsize)
     bitseq = []
@@ -111,7 +111,7 @@ def extractBitSequence(position, seed, count=520, endOfSequence = ''):
     numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
     while(True):
         begin = position + (idx * frameSize * numOfPartialPNs)
-        frame, realPos = yield from rb.read(frameSize * numOfPartialPNs, begin)
+        frame, realPos = yield from rb.readfrom(frameSize * numOfPartialPNs, begin)
         if (realPos != begin):
             print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
         end = begin + frameSize
@@ -154,7 +154,7 @@ def extractBitSequenceOld(position, seed, count=520, endOfSequence = ''):
 
     while(True):
         begin = position + (idx * frameSize)
-        frame, realPos = yield from rb.read(frameSize, begin)
+        frame, realPos = yield from rb.readfrom(frameSize, begin)
         if (realPos != begin):
             print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
         end = begin + frameSize
@@ -235,7 +235,7 @@ def findMSG(position, count=520):
     while(True):
         begin = position + (idx * frameSize * numOfPartialPNs)
         idx += 1
-        Nframes, realPos = yield from rb.read(frameSize * numOfPartialPNs, begin)
+        Nframes, realPos = yield from rb.readfrom(frameSize * numOfPartialPNs, begin)
         if (realPos != begin):
             print("!!!!! wrong position realPos %d, begin %d" % (realPos, begin))
         end = begin + frameSize * numOfPartialPNs
@@ -285,7 +285,7 @@ def getMaxCorr(position):
     aa  = datetime.datetime.now()
     alpha = 8
     targetFrameSize = frameSize * (numOfPartialPNs * 2) + 1 + alpha
-    source, realPos = yield from rb.read(targetFrameSize, position)
+    source, realPos = yield from rb.readfrom(targetFrameSize, position)
     if (realPos != position):
         print("warning!!  wrong position realPos %d, position %d" % (realPos, position))
 
@@ -434,8 +434,8 @@ def listen(doFunc):
             #UT.tprint("begin: ", begin, begin-initialTime)
             if (posRead < lastPosRead):
                 posRead = lastPosRead
-            #targetStream = inStream[posRead:]  # Update read pointer
-            #targetStream = yield from rb.read(posRead, frameSize*2+2, posRead)
+            #targetStream = inStream[posRead:]  # Update readfrom pointer
+            #targetStream = yield from rb.readfrom(posRead, frameSize*2+2, posRead)
             print ("pos: ", posRead / fs)
             posFound, posRead = yield from findSYNC(posRead, True)
             if posFound < 0:
@@ -451,7 +451,7 @@ def listen(doFunc):
                     break
                 posRead = position = tmpPosRead
             if endofSync == 0:
-                raise NotImplementedError("MSG corr is not found, last read: ", posRead)
+                raise NotImplementedError("MSG corr is not found, last readfrom: ", posRead)
 
             # Search Message
             msg, tmpPosRead = yield from findMSG(posRead)
