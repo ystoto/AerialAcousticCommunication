@@ -189,10 +189,15 @@ class GTK_Main(object):
         vbox.pack_start(hbox_5th_line , False, False, 0)
 
         # seek to given position
+        self.label_wm = Gtk.Label(label='watermark msg')
+        self.label_wm.set_margin_left(6)
+        self.label_wm.set_margin_right(6)
+        hbox_5th_line.pack_start(self.label_wm, False, False, 0)
         self.wm_entry = Gtk.Entry()
+        self.wm_entry.set_text("www.naver.com")
         hbox_5th_line.add(self.wm_entry)
         self.wmButtonImage = Gtk.Image()
-        self.wmButtonImage.set_from_stock("gtk-jump-down", Gtk.IconSize.BUTTON)
+        self.wmButtonImage.set_from_stock("gtk-go-down", Gtk.IconSize.BUTTON)
         self.wmButton = Gtk.Button.new()
         self.wmButton.add(self.wmButtonImage)
         self.wmButton.connect("clicked", self.wmToggled)
@@ -309,7 +314,7 @@ class GTK_Main(object):
             watermarked_data = watermarked_data.astype(dtype=self.audio_dtype, copy=False)
             # print("OU ", watermarked_data[:30], watermarked_data[-30:], watermarked_data.dtype, type(watermarked_data))
             self.stream.write(watermarked_data.tobytes())
-            self.after_wav.writeframesraw(np.int32(watermarked_data * norm_fact['int32']).tobytes())
+            # self.after_wav.writeframesraw(np.int32(watermarked_data * norm_fact['int32']).tobytes())
         #print ("output data: ", ret, buffer.pts, info.size)
 
     def _on_video_realize(self, widget):
