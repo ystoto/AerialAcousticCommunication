@@ -314,7 +314,9 @@ class GTK_Main(object):
             watermarked_data = watermarked_data.astype(dtype=self.audio_dtype, copy=False)
             # print("OU ", watermarked_data[:30], watermarked_data[-30:], watermarked_data.dtype, type(watermarked_data))
             self.stream.write(watermarked_data.tobytes())
-            # self.after_wav.writeframesraw(np.int32(watermarked_data * norm_fact['int32']).tobytes())
+            # todo: change the formula according to the input format
+            #self.after_wav.writeframesraw(np.int32(watermarked_data * norm_fact['int32']).tobytes())
+            #self.after_wav.writeframesraw(np.int16(watermarked_data).tobytes())
         #print ("output data: ", ret, buffer.pts, info.size)
 
     def _on_video_realize(self, widget):
@@ -421,7 +423,7 @@ class GTK_Main(object):
     def wmToggled(self, w):
         msg = self.wm_entry.get_text().strip()
         msg += '\n'
-        self.thread.requestWM("www.naver.com\n")
+        self.thread.requestWM(msg)
 
     def updateProgressSlider(self):
         if self.play_status == STOPPED:

@@ -29,7 +29,7 @@ from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMO
 #inputFile = 'SleepAway_partial.wav'
 #inputFile = 'SleepAway_partial_stft.wav'
 inputFile = 'after.wav'
-USE_MIC = False
+USE_MIC = True
 watingtime = 1.0  # Now, the getmaxcorr needs just 0.145msec
 
 FORMAT = pyaudio.paInt16
