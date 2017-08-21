@@ -20,16 +20,17 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Py
 # spec.loader.exec_module(STFT)
 
 import utilFunctions as UF
-
+import freqSpectrum as FS
 import wm_util as UT
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
     subband, norm_fact, partialPnSizePerFrame, CHUNK
 
-#inputFile = 'last_mic_in1.wav'
+inputFile = 'last_mic_in3.wav'
 #inputFile = 'SleepAway_partial.wav'
 #inputFile = 'SleepAway_partial_stft.wav'
-inputFile = 'after.wav'
-USE_MIC = True
+#inputFile = 'silence_stft.wav'
+#inputFile = 'after.wav'
+USE_MIC = False
 watingtime = 1.0  # Now, the getmaxcorr needs just 0.145msec
 
 FORMAT = pyaudio.paInt16
@@ -186,6 +187,53 @@ def matchBitSequence(left, right):
     return 0
 
 @asyncio.coroutine
+def showPN(position=415797, count = 11, numOfShift = 4):
+    global rb
+    pn = UT.getPN(sync_pn_seed, pnsize)
+    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    corrarray = np.ndarray(shape=(numOfShift,count))
+    corrarray.fill(0.0)
+    targetFrameSize = frameSize * numOfPartialPNs
+
+    orgPos = position
+    for shift in range(numOfShift):
+        position = orgPos + shift
+        for idx in range(count):
+            source, realPos = yield from rb.readfrom(targetFrameSize, position)
+            if (realPos != position):
+                print("warning!!  wrong position realPos %d, position %d" % (realPos, position))
+
+            try:
+                extractedPN = np.ndarray(shape=(pnsize))
+                extractedPN.fill(0.0)
+                for pnIdx in range(numOfPartialPNs):
+                    begin = pnIdx * frameSize
+                    end = begin + frameSize
+                    transformed = np.fft.fft(source[begin:end])
+                    b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, subband[0])
+                    extractedPN[pnIdx*partialPnSizePerFrame : (pnIdx+1)*partialPnSizePerFrame] = transformed.real[b:e]
+
+                posRead = realPos + int(targetFrameSize)
+                r1, r2 = UT.SGN(extractedPN, pn)
+                #print("before: ", r1, extractedPN)
+                #extractedPN = extractedPN * r1  # pn 사인 원복
+                #print("after: ", r1, extractedPN)
+                #print (r1)
+                corr = abs(np.corrcoef(extractedPN, pn)[0][1])
+                corrarray[shift][idx] = corr
+
+            except Exception as err:
+                print(err)
+                return -1, posRead
+
+            position = posRead + targetFrameSize
+    print(corrarray)
+    plt.plot(corrarray[:,:])
+    plt.show()
+    return
+
+
+@asyncio.coroutine
 def findSYNC(position, searchingMaxCorr = True):
     if searchingMaxCorr:
         posMaxCorr, posRead = yield from getMaxCorr(position)
@@ -290,7 +338,7 @@ def getMaxCorr(position):
         print("warning!!  wrong position realPos %d, position %d" % (realPos, position))
 
     try:
-        fftCache = dict()
+        fftCache = dict() # 1 샘플씩 옮기면서 correlation 계산시 fft 반복계산을 막기 위해 캐싱
         for idx in range(int(targetFrameSize/2) + 1 + alpha):
             extractedPN = []
             for pnIdx in range(numOfPartialPNs):
@@ -349,6 +397,7 @@ def readStream(inStream):
             if USE_MIC:
                 data = inStream.read(CHUNK)
                 data = np.fromstring(data, np.dtype('int16'))
+                #FS.updateSpectrum(data)
                 data = np.float32(data) / norm_fact[data.dtype.name]
                 #print(len(data))
                 rb.write(data)
@@ -362,6 +411,7 @@ def readStream(inStream):
                 size = CHUNK
                 if (len(inStream) < CHUNK):
                     size = len(inStream)
+                #FS.updateSpectrum(inStream[0:size], 44100)
                 rb.write(inStream[0:size])
                 inStream = inStream[size:]
                 if len(inStream) == 0:

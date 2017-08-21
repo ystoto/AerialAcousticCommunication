@@ -49,7 +49,7 @@ def insertBit(inbuf, outbuf, bit, pn, overwrite = False):
         for band in subband: # embed a bit to multiple subbands
             begin, end = UT.getTargetFreqBand(targetSpectrum, embededDataLength, band)
             if overwrite == True:
-                targetSpectrum.real[begin:end] = partialEmbededData
+                targetSpectrum.real[begin:end] = partialEmbededData * (len(targetSpectrum) * 0.7 / (end - begin)) # Magnitude 강화
             else:
                 targetSpectrum.real[begin:end] += partialEmbededData
 
@@ -242,7 +242,6 @@ def extractMSG(outbuf, position):
     return result, end
 
 def insertWM(inbuf, outbuf, msg=" "):
-
     try:
         out_writeptr = outbuf.writeptr()
         print("Insert SYNC - begin", inbuf.readptr(), outbuf.writeptr())
@@ -282,6 +281,7 @@ class watermaker(threading.Thread):
                 self.wm_requested = False
                 self.requested_msg = ""
             else:
+                # watermark 요청이 없으면 inbuf 에서 outbuf로 data bypass.
                 #print("wm - read - begin")
                 data = self.inbuf.read(CHUNK)
                 #print("wm - read - end - ", data.size)
@@ -300,14 +300,15 @@ def Start(inbuf, outbuf):
 
 
 if __name__ == "__main__":
-    inputFile = 'SleepAway_partial.wav'
+    #inputFile = 'SleepAway_partial.wav'
+    inputFile = 'silence.wav'
     input_signal = UT.readWav(inputFile)
 
     src = UT.RIngBuffer(44100 * 60)
     sink = UT.RIngBuffer(44100 * 60)
 
-    wm_position =3000 # msec
-    wm_position = int((fs / 100) * (wm_position / 10))  # in 10 msec
+    wm_position = 3000 # msg 삽입할 위치 (단위 : msec)
+    wm_position = int((fs / 100) * (wm_position / 10))  # 단위변환 / in 10 msec
 
     # insert WM
     thread = Start(src, sink)  # TODO: 1.2 second
@@ -322,12 +323,14 @@ if __name__ == "__main__":
             wm_requested = True
             thread.requestWM("www.naver.com\n")
 
+        # chunk 단위로 wav를 SRC ringbuffer에 입력 (watermarker에 의해 처리될 수 있도록)
         #print ("A - WRITE done( %d )remained( %d ) total( %d ), " % (transfered_size, input_signal.size, total_size))
         write_size = CHUNK if input_signal.size >= CHUNK else input_signal.size
         src.write(input_signal[:write_size], eos = False if input_signal.size > CHUNK else True)
         transfered_size += write_size
         input_signal = input_signal[write_size:]
 
+        # watermarker thread가 처리 완료한 데이타를 SINK ringbuffer로부터 읽어들임.
         #print("A - READ")
         watermarked_data.extend(sink.read(write_size))
 

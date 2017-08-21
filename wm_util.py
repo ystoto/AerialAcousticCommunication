@@ -7,6 +7,8 @@ import datetime
 import time
 #os.environ['PYTHONASYNCIODEBUG'] = '1'
 import asyncio
+import wave
+import struct
 
 # import importlib.util
 # spec = importlib.util.spec_from_file_location("stft", "E:/PycharmProjects/sms/software/models/stft.py")
@@ -329,7 +331,81 @@ def bitExtractionTestwithShift():
         bit, result = SGN(buf[begin:end], pn)
         print(bit, abs(np.corrcoef(buf[begin:end], pn)[0][1]), round(result, 3))
 
-if __name__ == "__main__":
-    correlationTest()
-    #bitExtractionTestwithShift()
+def waveRWtest():
+    from freqSpectrum import updateSpectrum
+    #wf = wave.open('E:/Dropbox/앱/Hi-Q Recordings/recording-20170703-113452.wav', 'rb')
+    wf = wave.open('E:/Dropbox/sin_15khz.wav', 'rb')
+    ch = wf.getnchannels()
+    bitwidth = wf.getsampwidth()
+    rate = wf.getframerate()
+    nframes = wf.getnframes()
+    print (ch, bitwidth, rate)
+    readframes = 0
+    while(True):
+        N = 1024
+        frames = wf.readframes(N)
+        y_ = struct.unpack("%dh" % (len(frames) / bitwidth), frames)
+        y = np.array(y_)
+        y = np.float32(y) / (2 ** (bitwidth * 8) - 1)
+        updateSpectrum(y)
+        size = len(y)
+        readframes += size
+        if readframes >= nframes:
+            break
+    print("Done")
 
+if __name__ == "__main__":
+    #waveRWtest()
+    #correlationTest()
+    #bitExtractionTestwithShift()
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    plt.close('all')
+
+    fs = 5e5
+    print ("fs: ", fs)
+    duration = 1
+    npts = int(fs * duration)
+    t = np.arange(npts, dtype=float) / fs
+    f = 1000
+    ref = 0.004
+    amp = ref * np.sqrt(2)
+    signal = amp * np.sin((f * duration) * np.linspace(0, 2 * np.pi, npts))
+    # plt.plot(signal)
+    # plt.show()
+
+    rms = np.sqrt(np.mean(signal ** 2))
+    print("rms: ", rms)
+    dbspl = 94 + 20 * np.log10(rms / ref)
+
+    # Window signal
+    win = np.hamming(npts)
+    signal = signal * win
+    plt.plot(signal)
+    plt.show()
+
+    sp = np.fft.fft(signal)
+    freq = np.fft.fftfreq(npts, 1.0 / fs)
+
+    # Scale the magnitude of FFT by window energy and factor of 2,
+    # because we are using half of FFT.
+    sp_mag = np.abs(sp) * 2 / np.sum(win)
+
+    # To obtain RMS values, divide by sqrt(2)
+    sp_rms = sp_mag / np.sqrt(2)
+
+    # Shift both vectors to have DC at center
+    freq = np.fft.fftshift(freq)
+    sp_rms = np.fft.fftshift(sp_rms)
+
+    # Convert to decibel scale
+    sp_db = 20 * np.log10(sp_rms / ref) + 94
+
+    plt.semilogx(freq, sp_db)
+    plt.xlim((0, fs / 2))
+    plt.ylim((-100, 100))
+    plt.grid('on')
+
+    # Compare the outputs
+    print(dbspl, sp_db.max())
