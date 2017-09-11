@@ -20,7 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Py
 import utilFunctions as UF
 
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, partialPnSizePerFrame, norm_fact, ASCII_MAX, CHUNK
+    subband, partialPnSize, norm_fact, ASCII_MAX, CHUNK
 
 class NotEnoughData(Exception):
     def __init__(self, *args, **kwargs):
@@ -30,12 +30,12 @@ class NotEnoughData(Exception):
         super().__init__()
 
 def insertBit(inbuf, outbuf, bit, pn, overwrite = False):
-    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
     embededData = pn * bit
 
     for idx in range(numOfPartialPNs):
-        begin = idx * partialPnSizePerFrame
-        end = begin + partialPnSizePerFrame
+        begin = idx * partialPnSize
+        end = begin + partialPnSize
         if end > pnsize:
             end = pnsize
         embededDataLength = end - begin
@@ -158,12 +158,12 @@ def extractSYNC(outbuf, position):
     found = []
     for bitIdx, value in enumerate(SYNC):
         pn = UT.getPN(sync_pn_seed, pnsize)
-        numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+        numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
         embededData = []
 
         for idx in range(numOfPartialPNs):
-            begin = idx * partialPnSizePerFrame
-            end = begin + partialPnSizePerFrame
+            begin = idx * partialPnSize
+            end = begin + partialPnSize
             if end > pnsize:
                 end = pnsize
             embededDataLength = end - begin
@@ -206,7 +206,7 @@ def insertMSG(inbuf, outbuf, msg):
 
 def extractMSG(outbuf, position):
     idx = 0
-    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
     pnlist = UT.generatePnList()
     result = str("")
     while (True):
@@ -221,7 +221,7 @@ def extractMSG(outbuf, position):
             frame, realPos = outbuf.readfromSync(frameSize, b, update_ptr=False)
             transformed = np.fft.fft(frame)
             for num, band in enumerate(subband):
-                b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, band)
+                b, e = UT.getTargetFreqBand(transformed, partialPnSize, band)
                 embededCode[num].extend(transformed.real[b:e])
 
         maxCorr = 0
@@ -334,9 +334,10 @@ if __name__ == "__main__":
         #print("A - READ")
         watermarked_data.extend(sink.read(write_size))
 
+    thread.join()
+    print("thread terminated")
+
     print("all data is written")
     # output sound file (monophonic with sampling rate of 44100)
     outputFile = './' + os.path.basename(inputFile)[:-4] + '_stft.wav'
     UF.wavwrite(np.array(watermarked_data), fs, outputFile)
-    thread.join()
-    print("thread terminated")

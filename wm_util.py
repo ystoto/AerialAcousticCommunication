@@ -17,34 +17,49 @@ import struct
 
 import utilFunctions as UF
 import bitarray
+from multiprocessing import Process, Queue
+import os
+import matplotlib.pyplot as plt
 
 ASCII_MAX = 127
 fs = 44100
-CHUNK = 1024
+CHUNK = 4096
 frameSize = 1024
-pnsize = 128  # 64bit 이상으로 올리면 스펙트럼 왜곡 발생함.., 대신 dB 을 0.2 정도로 낮추면 32bit 수준으로 왜곡 줄어듬.
-partialPnSizePerFrame = 32
-maxWatermarkingGain = 2  # 0 ~ 1
+pnsize = 32
+partialPnSize = 16
+maxWatermarkingGain = 0.7  # 0 ~ 1
 sync_pn_seed = 1
 msg_pn_seed = 2
 #SYNC = [+1]
-NUMOFSYNCREPEAT = 4
-SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
-# SYNC = [-1,+1,+1,+1,-1,+1,-1,+1,-1,-1,
-#         +1,-1,-1,+1,+1,+1,-1,+1,-1,+1,
-#         -1,-1,+1,-1,+1,-1,-1,+1,+1,-1,
-#         +1,-1,-1,+1,+1,-1,+1,+1,+1,+1,
-#         +1,+1,-1,+1,+1,+1,-1,+1,-1,+1,
-#         +1,-1,-1,-1,-1,-1,-1,-1,+1,+1,
-#         +1,-1,-1,-1]
-#SYNC = [1 for i in range(32)]
+NUMOFSYNCREPEAT = 1
 detectionThreshold = 0.7
-subband = [0.6]
+subband = [0.8]
+BASE_FREQ_OF_DATA_EMBEDDING = 17000
+FREQ_INTERVAL_OF_DATA_EMBEDDING = 180
+NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN = 7  # 162 msec
+NUM_OF_FRAMES_PER_PARTIAL_DATA_PN = 3
+
+SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
 
 INT16_FAC = (2**15)-1
 INT32_FAC = (2**31)-1
 INT64_FAC = (2**63)-1
 norm_fact = {'int16':INT16_FAC, 'int32':INT32_FAC, 'int64':INT64_FAC,'float32':1.0,'float64':1.0}
+
+
+def f(title, data):
+    print('parent process:', os.getppid())
+    print('process id:', os.getpid())
+    plt.title(title)
+    plt.plot(data)
+    plt.show()
+    print("plot done")
+
+def plotInNewProcess(title, data, join=False):
+    p = Process(target=f, args=(title, data,))
+    p.start()
+    if join:
+        p.join()
 
 def getTargetFreqBand(transformed, targetLength, begin_ratio = 0.7):
     spectrumSize = transformed.size
@@ -70,10 +85,11 @@ def getPN(i=4, size=10):
     seed = 39
     PN.seed((71912317 * (i * (i + 2) * (seed + 1)) + (i + 4779) * 317 * (seed)) % 15991)
     result = PN.rand(1, size)
-    #print ("PN:", result)
+    #print("PN:", result)
     result = result[0]
-    #print ("PN:", result)
-    return result * maxWatermarkingGain
+    #result *= maxWatermarkingGain
+    #print("PN:", result)
+    return result
 
 def norminnerproduct(a, b):
     num = np.sum(np.multiply(a,b))
@@ -200,15 +216,18 @@ class RIngBuffer:
             self.wp += s
         self.eos = eos
 
-    def read(self, length, update_ptr = True):
+    def read(self, length, update_ptr = True, block = True):
         while True:
             validDataLength = self.wp - self.rp
-            if not self.eos and validDataLength < length:
-                time.sleep(0.01)
-            else:
+            if validDataLength >= length:
                 break
+            elif self.eos or block is False:
+                length = validDataLength
+                break
+            else:
+                time.sleep(0.01)
 
-        if validDataLength <= 0 and self.eos:
+        if length <= 0:
             return np.array([])
 
         begin = self._RP()
@@ -354,13 +373,111 @@ def waveRWtest():
             break
     print("Done")
 
+def generateWave(frequency, amplitude, numOfSamples = 441, samplerate = 44100):
+    if len(frequency) != len(amplitude):
+        raise Exception("length of parameters Mismatch %d, %d" % (len(frequency), len(amplitude)))
+    if amplitude.max() > 1.0 or amplitude.min() < 0.0:
+        raise Exception("wrong values in amplitude max: %d, min: %d" % (amplitude.max(), amplitude.min()))
+
+    time = numOfSamples * 1.0 / samplerate
+    result = np.zeros(numOfSamples, dtype=np.float64)
+    for idx, val in enumerate(frequency):
+        w = 2 * np.pi * val
+        samples = np.linspace(0, time, numOfSamples)
+        result += amplitude[idx] * np.sin(w * samples)
+
+    # normalize
+    maxAmp = max(abs(result.max()), abs(result.min()))
+    result /= maxAmp
+    result *= maxWatermarkingGain
+    return result
+
+
 if __name__ == "__main__":
     #waveRWtest()
     #correlationTest()
     #bitExtractionTestwithShift()
     import numpy as np
     import matplotlib.pyplot as plt
+    from scipy.signal import get_window
+    ##############
 
+    from pylab import *
+    from numpy.fft import fft, fftshift, ifft, ifftshift
+
+    #
+    # emptySpectrum = np.array([np.complex128(0.0) for i in range(int(1024 / 2 + 1))])
+    # dataSignal = np.fft.irfft(emptySpectrum)
+    # abs(dataSignal.max())
+
+    Fs = 44100.  # the sampling frequency
+    Ts = 1. / Fs  # the sampling period
+
+    N = 256  # 샘플 갯수
+    freqStep = Fs / N  # resolution of the frequency in frequency domain
+
+    f = 10 * freqStep  # frequency of the wave
+    t = arange(N) * Ts  # x ticks in time domain, t = n*Ts
+    #y = cos(2 * pi * f * t) + 0.5 * sin(2 * pi * 3 * f * t)  # 테스트 신호
+    y = sin(2 * pi * 3 * f * t)  # 테스트 신호
+    w = get_window('hamming', N)
+    sw = sum(w)
+
+
+    #w *= y
+
+    Y = fft(y)  # FFT 분석
+    W = fft(w)
+    #W = np.multiply(W, Y)
+    #W *= Y
+
+    Y = fftshift(Y)  # middles the zero-point's axis
+    W = fftshift(W)
+
+    figure(figsize=(8, 8))
+    subplots_adjust(hspace=.4)
+
+    # Plot time data
+    subplot(4, 1, 1)
+    plot(t, y, '.-')
+    plot(t, w, '.-')
+    grid("on")
+    xlabel('Time (seconds)')
+    ylabel('Amplitude')
+    title('signals')
+    axis('tight')
+
+    freq = freqStep * arange(-N / 2, N / 2)  # x ticks in frequency domain
+
+    # Plot spectral magnitude
+    subplot(4, 1, 2)
+    plot(freq, abs(Y), '.-b')
+    plot(freq, abs(W))
+    grid("on")
+    xlabel('Frequency')
+    ylabel('Magnitude (Linear)')
+
+    # Plot phase
+    subplot(4, 1, 3)
+    plot(freq, angle(Y), '.-b')
+    plot(freq, angle(W))
+    grid("on")
+    xlabel('Frequency')
+    ylabel('Phase (Radian)')
+
+    # Plot phase
+    subplot(4, 1, 4)
+    plot(t, ifft(ifftshift(Y)), '.-')
+    plot(t, ifft(ifftshift(W)), '-')
+    grid("on")
+    xlabel('Time (seconds)')
+    ylabel('Amplitude')
+    title('signals')
+    axis('tight')
+
+    show()
+
+    ##################
     plt.close('all')
 
     fs = 5e5

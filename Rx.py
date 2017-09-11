@@ -22,16 +22,16 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Py
 import utilFunctions as UF
 import freqSpectrum as FS
 import wm_util as UT
-from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, SYNC, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, norm_fact, partialPnSizePerFrame, CHUNK
+from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, NUMOFSYNCREPEAT, detectionThreshold,\
+    subband, norm_fact, partialPnSize, CHUNK, NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN, BASE_FREQ_OF_DATA_EMBEDDING, FREQ_INTERVAL_OF_DATA_EMBEDDING
 
-inputFile = 'last_mic_in3.wav'
+inputFile = 'last_mic_in4.wav'
 #inputFile = 'SleepAway_partial.wav'
 #inputFile = 'SleepAway_partial_stft.wav'
 #inputFile = 'silence_stft.wav'
 #inputFile = 'after.wav'
 USE_MIC = False
-watingtime = 1.0  # Now, the getmaxcorr needs just 0.145msec
+watingtime = 0.15  # Now, the getmaxcorr needs just 0.145msec
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -109,7 +109,7 @@ def extractBitSequence(position, seed, count=520, endOfSequence = ''):
         print("Wrong endOfSequence, size of e:", len(e))
         return -1, -1
 
-    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
     while(True):
         begin = position + (idx * frameSize * numOfPartialPNs)
         frame, realPos = yield from rb.readfrom(frameSize * numOfPartialPNs, begin)
@@ -122,7 +122,7 @@ def extractBitSequence(position, seed, count=520, endOfSequence = ''):
         for pnIdx in range(numOfPartialPNs):
             transformed = np.fft.fft(frame)
             for num, band in enumerate(subband):
-                begin, end = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, band)
+                begin, end = UT.getTargetFreqBand(transformed, partialPnSize, band)
                 extractedPN[num].extend(transformed.real[begin:end])
         for num, band in enumerate(subband):
             bit, accuracy = UT.SGN(extractedPN[num], pn)
@@ -190,7 +190,7 @@ def matchBitSequence(left, right):
 def showPN(position=415797, count = 11, numOfShift = 4):
     global rb
     pn = UT.getPN(sync_pn_seed, pnsize)
-    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
     corrarray = np.ndarray(shape=(numOfShift,count))
     corrarray.fill(0.0)
     targetFrameSize = frameSize * numOfPartialPNs
@@ -210,8 +210,8 @@ def showPN(position=415797, count = 11, numOfShift = 4):
                     begin = pnIdx * frameSize
                     end = begin + frameSize
                     transformed = np.fft.fft(source[begin:end])
-                    b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, subband[0])
-                    extractedPN[pnIdx*partialPnSizePerFrame : (pnIdx+1)*partialPnSizePerFrame] = transformed.real[b:e]
+                    b, e = UT.getTargetFreqBand(transformed, partialPnSize, subband[0])
+                    extractedPN[pnIdx * partialPnSize : (pnIdx + 1) * partialPnSize] = transformed.real[b:e]
 
                 posRead = realPos + int(targetFrameSize)
                 r1, r2 = UT.SGN(extractedPN, pn)
@@ -257,7 +257,7 @@ def findSYNC(position, searchingMaxCorr = True):
 
     # Confirm whole SYNC
     numberOfHeadBits = len(SYNC) - numberOfMatchedTailBits
-    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
     position = posMaxCorr - (frameSize * numberOfHeadBits * numOfPartialPNs)
     wholeBits, tmpPosRead, tmp = yield from extractBitSequence(position, sync_pn_seed, len(SYNC))
     tmpNumberOfMatchedBits = matchBitSequence(wholeBits[0], SYNC)
@@ -276,7 +276,7 @@ def findSYNC(position, searchingMaxCorr = True):
 def findMSG(position, count=520):
     global rb
     idx = 0
-    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
     pnlist = UT.generatePnList()
     result = str("")
     print("At %d ****" % position, end=" ")
@@ -295,7 +295,7 @@ def findMSG(position, count=520):
             frame = Nframes[b:e]
             transformed = np.fft.fft(frame)
             for num, band in enumerate(subband):
-                b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, band)
+                b, e = UT.getTargetFreqBand(transformed, partialPnSize, band)
                 embededCode[num].extend(transformed.real[b:e])
 
         maxCorr = 0
@@ -326,33 +326,35 @@ def getMaxCorr(position):
     posMaxCorr = -1
     posRead = 0
     pn = UT.getPN(sync_pn_seed, pnsize)
-    numOfPartialPNs = int((pnsize + partialPnSizePerFrame - 1) / partialPnSizePerFrame)
+    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
     #print("pn: ", pn[:20])
     corrarray = []
     dotparray = []
     aa  = datetime.datetime.now()
-    alpha = 8
-    targetFrameSize = frameSize * (numOfPartialPNs * 2) + 1 + alpha
+    targetFrameSize = frameSize * (numOfPartialPNs * NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN) * 2
     source, realPos = yield from rb.readfrom(targetFrameSize, position)
+    # plt.plot(source)
+    # plt.show()
     if (realPos != position):
         print("warning!!  wrong position realPos %d, position %d" % (realPos, position))
 
     try:
-        fftCache = dict() # 1 샘플씩 옮기면서 correlation 계산시 fft 반복계산을 막기 위해 캐싱
-        for idx in range(int(targetFrameSize/2) + 1 + alpha):
+        idxList = [ int(i * (frameSize * NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN / 2)) for i in range( numOfPartialPNs * 2)]
+        #print("getMaxCorr: pos", position, idxList)
+        for idx in idxList: # partialPnSize 의 절반씩 옮기면서 correlation 계산
             extractedPN = []
             for pnIdx in range(numOfPartialPNs):
-                begin = idx + pnIdx * frameSize
+                begin = idx + pnIdx * NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN * frameSize
                 end = begin + frameSize
-                if begin in fftCache:
-                    transformed = fftCache[begin]
-                    b = 0
-                    e = partialPnSizePerFrame
-                else:
-                    transformed = np.fft.fft(source[begin:end])
-                    b, e = UT.getTargetFreqBand(transformed, partialPnSizePerFrame, subband[0])
-                    fftCache[begin] = transformed[b:e]
-                extractedPN.extend(transformed.real[b:e])
+                transformed = np.fft.rfft(source[begin:end])
+                freq = [BASE_FREQ_OF_DATA_EMBEDDING + i * FREQ_INTERVAL_OF_DATA_EMBEDDING for i in range(partialPnSize)]
+                #print ("bef freq:", freq)
+                for fIdx, val in enumerate(freq):
+                    freq[fIdx] = int(val / (fs/2/(len(transformed)))) # search bands
+                    extractedPN.append(abs(transformed[freq[fIdx]]))
+
+                #print("aft freq:", freq)
+                #b, e = UT.getTargetFreqBand(transformed, partialPnSize, subband[0])
 
             posRead = realPos + idx + int(numOfPartialPNs * frameSize)
             corr = abs(np.corrcoef(extractedPN, pn)[0][1])
@@ -385,6 +387,50 @@ def getMaxCorr(position):
     else:
         #print("Can't find cross-correlation peak over 0.8, max:%d in idx:%d" % (max_value, max_index))
         return -1, posRead
+
+import threading
+class streamReader(threading.Thread):
+    def __init__(self, inStream):
+        self.inStream = inStream
+        super().__init__()
+
+    def run(self):
+        global rb
+        q = True
+        count = 0
+        print("begin")
+        while (True):
+            try:
+                # print("before", end=" ")
+                if USE_MIC:
+                    data = self.inStream.read(CHUNK)
+                    data = np.fromstring(data, np.dtype('int16'))
+                    # FS.updateSpectrum(data)
+                    data = np.float32(data) / norm_fact[data.dtype.name]
+                    # print(len(data))
+                    rb.write(data)
+                    if (q and rb.writeptr() > RATE * 30):
+                        UF.wavwrite(rb.dat()[:RATE * 30], fs, "last_mic_in.wav")
+                        q = False
+                    # count += 1
+                    # if (count % 1 == 0):
+                    time.sleep(0.001)
+                else:
+                    size = CHUNK
+                    if (len(self.inStream) < CHUNK):
+                        size = len(self.inStream)
+                    # FS.updateSpectrum(inStream[0:size], 44100)
+                    rb.write(self.inStream[0:size])
+                    self.inStream = self.inStream[size:]
+                    if len(self.inStream) == 0:
+                        raise IOError("end of stream")
+                    time.sleep(0.002)
+                    # print("Done")
+            except IOError as err:
+                print(err, datetime.datetime.now())
+                if (str(err) == "end of stream"):
+                    break
+                pass
 
 @asyncio.coroutine
 def readStream(inStream):
@@ -480,7 +526,7 @@ def listen(doFunc):
             begin = datetime.datetime.now()
             if (begin - initialTime).total_seconds() > TIMEOUT > 0:
                 break;
-            posRead = getCurrentPos(begin - initialTime) # absolute position
+            posRead = 910672# getCurrentPos(begin - initialTime) # absolute position
             #UT.tprint("begin: ", begin, begin-initialTime)
             if (posRead < lastPosRead):
                 posRead = lastPosRead
@@ -518,6 +564,7 @@ def listen(doFunc):
             end = datetime.datetime.now()
             diff_sec = watingtime - (end-begin).total_seconds()
             if (diff_sec > 0):
+                print("wait", diff_sec, begin, end)
                 yield from asyncio.sleep(diff_sec)
             else:
                 yield from asyncio.sleep(0.005)
@@ -536,10 +583,14 @@ if __name__ == "__main__":
     rb = UT.RIngBuffer(RATE * 60)
     inStream = mic_on()
     loop = asyncio.get_event_loop()
+    # srThread = streamReader(inStream)
+    # srThread.start()
+    # print("sr start")
+
     loop.run_until_complete(asyncio.gather(
         readStream(inStream),
         listen(doMsg),
     ))
 
+    # srThread.join()
     mic_off(inStream)
-
