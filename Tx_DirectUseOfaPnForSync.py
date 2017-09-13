@@ -16,7 +16,7 @@ import utilFunctions as UF
 
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, NUMOFSYNCREPEAT, detectionThreshold,\
     subband, partialPnSize, norm_fact, ASCII_MAX, CHUNK, BASE_FREQ_OF_DATA_EMBEDDING, FREQ_INTERVAL_OF_DATA_EMBEDDING,\
-    NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN, NUM_OF_FRAMES_PER_PARTIAL_DATA_PN
+    NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN, NUM_OF_FRAMES_PER_PARTIAL_MSG_PN
 
 class NotEnoughData(Exception):
     def __init__(self, *args, **kwargs):
@@ -236,7 +236,7 @@ def insertMSG(inbuf, outbuf, msg):
         for idx in range(int(pnsize / partialPnSize)):
             begin = idx * partialPnSize
             end = begin + partialPnSize
-            insertBit(inbuf, outbuf, pn[begin:end], NUM_OF_FRAMES_PER_PARTIAL_DATA_PN)
+            insertBit(inbuf, outbuf, pn[begin:end], NUM_OF_FRAMES_PER_PARTIAL_MSG_PN)
     print("")
     return nextPosition
 

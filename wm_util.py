@@ -25,19 +25,18 @@ ASCII_MAX = 127
 fs = 44100
 CHUNK = 4096
 frameSize = 1024
-pnsize = 32
-partialPnSize = 16
+pnsize = 32*3
+partialPnSize = 16*2
 maxWatermarkingGain = 0.7  # 0 ~ 1
 sync_pn_seed = 1
 msg_pn_seed = 2
 #SYNC = [+1]
 NUMOFSYNCREPEAT = 1
 detectionThreshold = 0.7
-subband = [0.8]
 BASE_FREQ_OF_DATA_EMBEDDING = 17000
-FREQ_INTERVAL_OF_DATA_EMBEDDING = 180
+FREQ_INTERVAL_OF_DATA_EMBEDDING = 120
 NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN = 7  # 162 msec
-NUM_OF_FRAMES_PER_PARTIAL_DATA_PN = 3
+NUM_OF_FRAMES_PER_PARTIAL_MSG_PN = 3
 
 SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
 
@@ -320,10 +319,16 @@ def tprint(*args, **kwargs):
 def correlationTest():
     pnarr = generatePnList()
 
+    minCorr = 1
+    maxCorr = 0
+    sum = 0
+    sumOfDiff = 0
     for idx in range(ASCII_MAX):
         max = 0
+        secondMax = 0
         maxidx = -1
         a = pnarr[idx]
+        corrArray = []
         for zidx in range(ASCII_MAX):
             noise = PN.rand(1, pnsize)[0] / 0.78
             b = np.add(a, noise)  # acoustic noise
@@ -331,7 +336,23 @@ def correlationTest():
             if max <= corr:
                 max = corr
                 maxidx = zidx
-        print ("%d  -- %d" % (idx, maxidx), max)
+            if secondMax < corr < max:
+                secondMax = corr
+
+            corrArray.append(corr)
+
+        if minCorr > max:
+            minCorr = max
+        if maxCorr < max:
+            maxCorr = max
+        sum += max
+        sumOfDiff += (max - secondMax)
+
+        print ("%d  -- idx( %d ), corr( %2.2f , %2.2f ), min( %2.2f ), max( %2.2f ), aver( %2.2f )"\
+               % (idx, maxidx, max, secondMax, minCorr, maxCorr, sum/(idx+1)), sumOfDiff/(idx+1))
+        # plt.plot(corrArray)
+        # plt.show()
+
         if idx != maxidx:
             print ("***************************************")
             exit(1)
@@ -353,7 +374,7 @@ def bitExtractionTestwithShift():
 def waveRWtest():
     from freqSpectrum import updateSpectrum
     #wf = wave.open('E:/Dropbox/앱/Hi-Q Recordings/recording-20170703-113452.wav', 'rb')
-    wf = wave.open('E:/Dropbox/sin_15khz.wav', 'rb')
+    wf = wave.open('E:/Dropbox/sin_15khz_1.0.wav', 'rb')
     ch = wf.getnchannels()
     bitwidth = wf.getsampwidth()
     rate = wf.getframerate()
@@ -395,7 +416,7 @@ def generateWave(frequency, amplitude, numOfSamples = 441, samplerate = 44100):
 
 if __name__ == "__main__":
     #waveRWtest()
-    #correlationTest()
+    correlationTest()
     #bitExtractionTestwithShift()
     import numpy as np
     import matplotlib.pyplot as plt
