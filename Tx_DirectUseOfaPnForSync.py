@@ -15,7 +15,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'E:/Py
 import utilFunctions as UF
 
 from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, NUMOFSYNCREPEAT, detectionThreshold,\
-    subband, partialPnSize, norm_fact, ASCII_MAX, CHUNK, BASE_FREQ_OF_DATA_EMBEDDING, FREQ_INTERVAL_OF_DATA_EMBEDDING,\
+    partialPnSize, norm_fact, ASCII_MAX, CHUNK, BASE_FREQ_OF_DATA_EMBEDDING, FREQ_INTERVAL_OF_DATA_EMBEDDING,\
     NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN, NUM_OF_FRAMES_PER_PARTIAL_MSG_PN
 
 class NotEnoughData(Exception):

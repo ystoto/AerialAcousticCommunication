@@ -25,17 +25,17 @@ ASCII_MAX = 127
 fs = 44100
 CHUNK = 4096
 frameSize = 1024
-pnsize = 32*3
+pnsize = 32*3  # correlationTest 에 따르면 64 일 때는 118 번째 생성한 PN 에서 오류 발생
 partialPnSize = 16*2
 maxWatermarkingGain = 0.7  # 0 ~ 1
-sync_pn_seed = 1
-msg_pn_seed = 2
+sync_pn_seed = 8
+msg_pn_seed = 9
 #SYNC = [+1]
 NUMOFSYNCREPEAT = 1
-detectionThreshold = 0.7
+detectionThreshold = 0.6
 BASE_FREQ_OF_DATA_EMBEDDING = 17000
-FREQ_INTERVAL_OF_DATA_EMBEDDING = 120
-NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN = 7  # 162 msec
+FREQ_INTERVAL_OF_DATA_EMBEDDING = 80
+NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN = 7  # (7-2) * 23 = 115 msec보다 작거나 같은 주기로 SYNC 모니터링을 해야함.
 NUM_OF_FRAMES_PER_PARTIAL_MSG_PN = 3
 
 SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]

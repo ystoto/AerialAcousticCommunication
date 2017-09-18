@@ -26,18 +26,17 @@ from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, NUMOFSYNCR
     norm_fact, partialPnSize, CHUNK, NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN, NUM_OF_FRAMES_PER_PARTIAL_MSG_PN,\
     BASE_FREQ_OF_DATA_EMBEDDING, FREQ_INTERVAL_OF_DATA_EMBEDDING
 
-inputFile = 'last_mic_in4.wav'
+#inputFile = 'last_mic_in5.wav'
 #inputFile = 'SleepAway_partial.wav'
-#inputFile = 'SleepAway_partial_stft.wav'
+inputFile = 'SleepAway_partial_stft.wav'
 #inputFile = 'silence_stft.wav'
 #inputFile = 'after.wav'
-USE_MIC = False
-watingtime = 0.15  # Now, the getmaxcorr needs just 0.145msec
-
+USE_MIC = True
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
 TIMEOUT = 0
+watingtime = frameSize * (NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN-2) / RATE # 1024 * (7-2) / 44100 = 116ms Now, the getmaxcorr needs just 0.145msec
 
 @asyncio.coroutine
 def printMSG(posRead):
@@ -134,7 +133,7 @@ def extractPN(source, numOfFramesPerPartialPn, numOfPartialPNs):
     return extractedPN
 
 @asyncio.coroutine
-def findMSG(position, count=520):
+def findMSG(position, count=20):
     global rb
     idx = 0
     numOfPartialPNs = int(pnsize / partialPnSize)
@@ -240,12 +239,12 @@ def getMaxCorr(position):
 
     bb = datetime.datetime.now()
     print("execution time: ", (bb-aa).total_seconds())
-    print ("--------------------max: ", max_corr, posMaxCorr)
+    print ("--------------------max: %10.2f, %d" % (max_corr, posMaxCorr))
     #print("pn_max/min : ", pn.max(), pn.min())
     # plt.plot(corrarray)
     # plt.show()
 
-    if max_corr > detectionThreshold:
+    if max_corr >= detectionThreshold:
         print("--------------------Found maximum:", posMaxCorr, max_corr, posRead)
         return posMaxCorr, posRead
     else:
@@ -305,15 +304,17 @@ def readStream(inStream):
         try:
             #print("before", end=" ")
             if USE_MIC:
-                data = inStream.read(CHUNK)
-                data = np.fromstring(data, np.dtype('int16'))
-                #FS.updateSpectrum(data)
-                data = np.float32(data) / norm_fact[data.dtype.name]
-                #print(len(data))
-                rb.write(data)
-                if (q and rb.writeptr() > RATE * 30):
-                    UF.wavwrite(rb.dat()[:RATE * 30], fs, "last_mic_in.wav")
-                    q = False
+                if inStream.get_read_available() >= CHUNK: # to avoid blocking of all threads
+                    data = inStream.read(CHUNK)
+                    inStream.get_read_available()
+                    data = np.fromstring(data, np.dtype('int16'))
+                    #FS.updateSpectrum(data)
+                    data = np.float32(data) / norm_fact[data.dtype.name]
+                    #print(len(data))
+                    rb.write(data)
+                    if (q and rb.writeptr() > RATE * 30):
+                        UF.wavwrite(rb.dat()[:RATE * 30], fs, "last_mic_in.wav")
+                        q = False
                 # count += 1
                 # if (count % 1 == 0):
                 yield from asyncio.sleep(0.001)
@@ -374,6 +375,7 @@ def listen(doFunc):
     initialTime = datetime.datetime.now()
     lastPosRead = 0
     posRead = 0
+    sumPosRead = 0
     #UT.tprint("init: ", initialTime)
     #
     # p = 1121493+3
@@ -390,22 +392,25 @@ def listen(doFunc):
             begin = datetime.datetime.now()
             if (begin - initialTime).total_seconds() > TIMEOUT > 0:
                 break;
-            posRead = 910672# getCurrentPos(begin - initialTime) # absolute position
+            #posRead = getCurrentPos(begin - initialTime) # absolute position
+            sumPosRead += (watingtime * RATE)
+            posRead = sumPosRead
             #UT.tprint("begin: ", begin, begin-initialTime)
             if (posRead < lastPosRead):
                 posRead = lastPosRead
             #targetStream = inStream[posRead:]  # Update readfrom pointer
             #targetStream = yield from rb.readfrom(posRead, frameSize*2+2, posRead)
-            print ("pos: ", posRead / fs)
+            print ("pos: %10.4f, %d" % ((posRead / fs), posRead))
             posFound, posRead = yield from findSYNC(posRead, True)
             if posFound < 0:
                 raise NotImplementedError("SYN is not found")
 
             # Search Message
-            posRead = 928592 - frameSize * 1
-            for iii in range(12):
-                print("---------", iii, posRead + iii * frameSize/3)
-                msg, tmpPosRead = yield from findMSG(posRead + iii * frameSize/3, 20)
+            msg, tmpPosRead = yield from findMSG(posRead)
+            # posRead = 928592 - frameSize * 1
+            # for iii in range(12):
+            #     print("---------", iii, posRead + iii * frameSize/3)
+            #     msg, tmpPosRead = yield from findMSG(posRead + iii * frameSize/3, 20)
             if (len(msg) <= 0):
                 raise NotImplementedError("MSG is not found")
             lastPosRead = tmpPosRead
@@ -419,8 +424,8 @@ def listen(doFunc):
             end = datetime.datetime.now()
             diff_sec = watingtime - (end-begin).total_seconds()
             if (diff_sec > 0):
-                print("wait", diff_sec, begin, end)
-                yield from asyncio.sleep(diff_sec)
+                print("wait", diff_sec/2, begin, end)
+                yield from asyncio.sleep(diff_sec/2)
             else:
                 yield from asyncio.sleep(0.005)
     return
