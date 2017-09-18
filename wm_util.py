@@ -32,11 +32,11 @@ sync_pn_seed = 8
 msg_pn_seed = 9
 #SYNC = [+1]
 NUMOFSYNCREPEAT = 1
-detectionThreshold = 0.6
+detectionThreshold = 0.5
 BASE_FREQ_OF_DATA_EMBEDDING = 17000
 FREQ_INTERVAL_OF_DATA_EMBEDDING = 80
 NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN = 7  # (7-2) * 23 = 115 msec보다 작거나 같은 주기로 SYNC 모니터링을 해야함.
-NUM_OF_FRAMES_PER_PARTIAL_MSG_PN = 3
+NUM_OF_FRAMES_PER_PARTIAL_MSG_PN = 5
 
 SYNC = [+1, +1, +1, -1, -1, -1, +1, -1, -1, +1, -1]
 

@@ -26,9 +26,9 @@ from wm_util import pnsize, frameSize, sync_pn_seed, msg_pn_seed, fs, NUMOFSYNCR
     norm_fact, partialPnSize, CHUNK, NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN, NUM_OF_FRAMES_PER_PARTIAL_MSG_PN,\
     BASE_FREQ_OF_DATA_EMBEDDING, FREQ_INTERVAL_OF_DATA_EMBEDDING
 
-#inputFile = 'last_mic_in5.wav'
+inputFile = 'last_mic_in.wav'
 #inputFile = 'SleepAway_partial.wav'
-inputFile = 'SleepAway_partial_stft.wav'
+#inputFile = 'SleepAway_partial_stft.wav'
 #inputFile = 'silence_stft.wav'
 #inputFile = 'after.wav'
 USE_MIC = True
@@ -112,9 +112,34 @@ def findSYNC(position, searchingMaxCorr = True):
     else:
         posMaxCorr = position
 
+    # get correlations from leftmost to rightmost
+    corrArray = []
+    pn = UT.getPN(sync_pn_seed, pnsize)
+    numOfPartialPNs = int(pnsize / partialPnSize)
+    leftMostPos = basePos = posMaxCorr - ((NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN - 1) * frameSize)
+    sizeOfFramesPerFullPN = frameSize * numOfPartialPNs * NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN
+    Nframes, realPos = yield from rb.readfrom((NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN * (numOfPartialPNs+2) * frameSize), basePos)
+    for idx in range(NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN * 2 - 1):
+        begin = idx * frameSize
+        end = begin + sizeOfFramesPerFullPN
+        extractedPN = extractPN(Nframes[begin:end], NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN, numOfPartialPNs)
+        corrArray.append(abs(np.corrcoef(extractedPN, pn)[0][1]))
+        basePos += frameSize
+
+    # search maximum summation
+    maxSummation = 0
+    maxSummationIdx = -1
+    for idx in range(NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN):
+        s = sum(corrArray[idx:idx+NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN])
+        print ("::", idx, s, corrArray[idx:idx+NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN])
+        if maxSummation < s:
+            maxSummation = s
+            maxSummationIdx = idx
+
     # find next position after SYNC
-    numOfPartialPNs = int((pnsize + partialPnSize - 1) / partialPnSize)
-    print("begin of SYNC : ", posMaxCorr)
+    initialPosMaxCorr = posMaxCorr
+    posMaxCorr = leftMostPos + maxSummationIdx * frameSize
+    print("begin of SYNC : %d -> %d" % (initialPosMaxCorr, posMaxCorr))
     endOfSync = posMaxCorr + (numOfPartialPNs * NUM_OF_FRAMES_PER_PARTIAL_SYNC_PN * frameSize)
     print("end of SYNC : ", endOfSync)
     return posMaxCorr, endOfSync
